@@ -21,7 +21,7 @@
 #include "hw/misc/esp32s2_dport.h"
 #include "target/xtensa/cpu.h"
 
-#define TYPE_ESP32S2_DPORT "misc.esp32.dport"
+//#define TYPE_ESP32S2_DPORT "misc.esp32.dport"
 
 
 #define ESP32S2_DPORT_SIZE        (S2_DR_REG_DPORT_APB_BASE - S2_DR_REG_DPORT_BASE)
@@ -390,6 +390,7 @@ static void esp32s2_dport_realize(DeviceState *dev, Error **errp)
     for (int i = 0; i < s->cpu_count; ++i) {
         char name[16];
         snprintf(name, sizeof(name), "cpu%d", i);
+        printf("Name[%s]",name);
         object_property_set_link(OBJECT(&s->intmatrix), OBJECT(qemu_get_cpu(i)), name, &error_abort);
     }
     object_property_set_bool(OBJECT(&s->intmatrix), true, "realized", &error_abort);

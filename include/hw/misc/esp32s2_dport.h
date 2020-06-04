@@ -11,7 +11,7 @@
 typedef struct Esp32DportState Esp32DportState;
 typedef struct Esp32CacheState Esp32CacheState;
 
-#define TYPE_ESP32S2_INTMATRIX "misc.esp32.intmatrix"
+#define TYPE_ESP32S2_INTMATRIX "misc.esp32s2.intmatrix"
 #define ESP32S2_INTMATRIX(obj) OBJECT_CHECK(Esp32IntMatrixState, (obj), TYPE_ESP32S2_INTMATRIX)
 
 typedef struct Esp32IntMatrixState {
@@ -26,7 +26,7 @@ typedef struct Esp32IntMatrixState {
 } Esp32IntMatrixState;
 
 
-#define TYPE_ESP32S2_CROSSCORE_INT "misc.esp32.crosscoreint"
+#define TYPE_ESP32S2_CROSSCORE_INT "misc.esp32s2.crosscoreint"
 #define ESP32S2_CROSSCORE_INT(obj) OBJECT_CHECK(Esp32CrosscoreInt, (obj), TYPE_ESP32S2_CROSSCORE_INT)
 
 typedef struct Esp32CrosscoreInt {
@@ -36,7 +36,7 @@ typedef struct Esp32CrosscoreInt {
 } Esp32CrosscoreInt;
 
 
-#define TYPE_ESP32S2_DPORT "misc.esp32.dport"
+#define TYPE_ESP32S2_DPORT "misc.esp32s2.dport"
 #define ESP32S2_DPORT(obj) OBJECT_CHECK(Esp32DportState, (obj), TYPE_ESP32S2_DPORT)
 
 #define ESP32S2_CACHE_PAGE_SIZE           0x10000

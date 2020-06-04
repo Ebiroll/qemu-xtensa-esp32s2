@@ -5,7 +5,7 @@
 #include "hw/registerfields.h"
 #include "hw/misc/esp32s2_reg.h"
 
-#define TYPE_ESP32S2_SHA "misc.esp32.sha"
+#define TYPE_ESP32S2_SHA "misc.esp32s2.sha"
 #define ESP32S2_SHA(obj) OBJECT_CHECK(Esp32ShaState, (obj), TYPE_ESP32S2_SHA)
 
 #define ESP32S2_SHA_HASH_REG_CNT    16

@@ -14763,12 +14763,12 @@ static xtensa_opcode_encode_fn Opcode_wrmsk_expstate_encode_fns[] = {
   Opcode_wrmsk_expstate_Slot_inst_encode, 0, 0
 };
 
-
+/*
 uint32 *bypass_entry(__attribute__((unused)) int i);
 uint32 *bypass_entry(__attribute__((unused)) int i) {
     return 0;
 }
-
+*/
 
 /* Opcode table.  */
 

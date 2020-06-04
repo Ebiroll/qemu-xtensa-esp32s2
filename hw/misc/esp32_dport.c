@@ -340,6 +340,8 @@ static void esp32_dport_realize(DeviceState *dev, Error **errp)
         char name[16];
         snprintf(name, sizeof(name), "cpu%d", i);
         object_property_set_link(OBJECT(&s->intmatrix), OBJECT(qemu_get_cpu(i)), name, &error_abort);
+        printf("Name[%s]",name);
+
     }
     object_property_set_bool(OBJECT(&s->intmatrix), true, "realized", &error_abort);
 
