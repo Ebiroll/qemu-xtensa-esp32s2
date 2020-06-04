@@ -91,6 +91,8 @@ obj-$(CONFIG_MAC_VIA) += mac_via.o
 
 common-obj-$(CONFIG_GRLIB) += grlib_ahb_apb_pnp.o
 
+obj-$(CONFIG_ESP32)  += esp32s2_dport.o
+obj-$(CONFIG_ESP32) += esp32s2_sha.o
 obj-$(CONFIG_ESP32) += esp32_dport.o
 obj-$(CONFIG_ESP32) += esp32_intmatrix.o
 obj-$(CONFIG_ESP32) += esp32_crosscore_int.o

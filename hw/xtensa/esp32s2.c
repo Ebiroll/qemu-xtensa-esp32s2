@@ -1,0 +1,1049 @@
+/*
+ * ESP32 SoC and machine
+ *
+ * Copyright (c) 2019 Espressif Systems (Shanghai) Co. Ltd.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 or
+ * (at your option) any later version.
+ */
+
+#include "qemu/osdep.h"
+#include "qemu/log.h"
+#include "qemu/error-report.h"
+#include "qapi/error.h"
+#include "qemu-common.h"
+#include "hw/hw.h"
+#include "hw/boards.h"
+#include "hw/loader.h"
+#include "hw/sysbus.h"
+#include "target/xtensa/cpu.h"
+#include "hw/misc/esp32s2_reg.h"
+#include "hw/char/esp32_uart.h"
+#include "hw/gpio/esp32_gpio.h"
+#include "hw/misc/esp32s2_dport.h"
+#include "hw/misc/esp32_rtc_cntl.h"
+#include "hw/misc/esp32_rng.h"
+#include "hw/misc/esp32s2_sha.h"
+#include "hw/timer/esp32_frc_timer.h"
+#include "hw/timer/esp32_timg.h"
+#include "hw/ssi/esp32_spi.h"
+#include "hw/nvram/esp32_efuse.h"
+#include "hw/xtensa/xtensa_memory.h"
+#include "hw/misc/unimp.h"
+#include "hw/irq.h"
+#include "hw/qdev-properties.h"
+#include "sysemu/sysemu.h"
+#include "sysemu/reset.h"
+#include "sysemu/runstate.h"
+#include "sysemu/blockdev.h"
+#include "sysemu/block-backend.h"
+#include "exec/exec-all.h"
+#include "net/net.h"
+#include "elf.h"
+//#include "exec/memory.h"
+#include "migration/vmstate.h"
+
+
+// TODO, map flash when Cache_Ibus_MMU_Set is called
+
+#define TYPE_ESP32S2_SOC "xtensa.esp32s2"
+#define ESP32S2_SOC(obj) OBJECT_CHECK(Esp32S2SocState, (obj), TYPE_ESP32S2_SOC)
+
+#define TYPE_ESP32S2_CPU XTENSA_CPU_TYPE_NAME("esp32s2")
+
+typedef struct XtensaCPU XtensaCPU;
+
+
+enum {
+    ESP32S2_MEMREGION_IROM,
+    ESP32S2_MEMREGION_IROM1,
+    ESP32S2_MEMREGION_DROM,
+    ESP32S2_MEMREGION_DRAM,
+    ESP32S2_MEMREGION_IRAM,
+    ESP32S2_MEMREGION_ICACHE0,
+    ESP32S2_MEMREGION_ICACHE1,
+    ESP32S2_MEMREGION_RTCSLOW,
+    ESP32S2_MEMREGION_RTCFAST_D,
+    ESP32S2_MEMREGION_RTCFAST_I,
+};
+
+
+// Overall memory map 
+// drom0 low address for icache
+#define SOC_DROM_LOW    0x3F000000 
+// dram0 high address for dcache
+#define SOC_DROM_HIGH   0x3FF80000 
+#define SOC_IROM_LOW    0x40080000
+#define SOC_IROM_HIGH   0x40800000
+#define SOC_IROM_MASK_LOW  0x40000000
+#define SOC_IROM_MASK_HIGH 0x4001A100
+#define SOC_IRAM_LOW    0x40020000
+#define SOC_IRAM_HIGH   0x40070000
+#define SOC_DRAM_LOW    0x3FFB0000
+#define SOC_DRAM_HIGH   0x40000000
+#define SOC_RTC_IRAM_LOW  0x40070000
+#define SOC_RTC_IRAM_HIGH 0x40072000
+#define SOC_RTC_DRAM_LOW  0x3ff9e000
+#define SOC_RTC_DRAM_HIGH 0x3ffa0000
+#define SOC_RTC_DATA_LOW  0x50000000
+#define SOC_RTC_DATA_HIGH 0x50002000
+#define SOC_EXTRAM_DATA_LOW 0x3F500000
+#define SOC_EXTRAM_DATA_HIGH 0x3FF80000
+
+
+static const struct MemmapEntry {
+    hwaddr base;
+    hwaddr size;
+} ESP32S2_memmap[] = {
+    [ESP32S2_MEMREGION_DROM] = { SOC_DROM_LOW, SOC_DROM_HIGH-SOC_DROM_LOW},
+    [ESP32S2_MEMREGION_IROM] = { 0x40000000, 0x80000 },
+    [ESP32S2_MEMREGION_IROM1] = { 0x3ffa0000, 0x10000 },
+    [ESP32S2_MEMREGION_DRAM] = { SOC_DRAM_LOW, SOC_DRAM_HIGH-SOC_DRAM_LOW},
+    [ESP32S2_MEMREGION_IRAM] = { SOC_IRAM_LOW, SOC_IRAM_HIGH-SOC_IRAM_LOW },
+    [ESP32S2_MEMREGION_ICACHE0] = { SOC_DROM_LOW ,SOC_DROM_HIGH-SOC_DROM_LOW },
+    [ESP32S2_MEMREGION_ICACHE1] = { SOC_IRAM_LOW ,SOC_IRAM_HIGH-SOC_IRAM_LOW },
+    [ESP32S2_MEMREGION_RTCSLOW] = { SOC_RTC_DATA_LOW, SOC_RTC_DATA_HIGH-SOC_RTC_DATA_LOW },
+    [ESP32S2_MEMREGION_RTCFAST_I] = {SOC_RTC_IRAM_LOW, SOC_RTC_IRAM_HIGH-SOC_RTC_IRAM_LOW},
+    [ESP32S2_MEMREGION_RTCFAST_D] = { SOC_RTC_DRAM_LOW, SOC_RTC_DRAM_HIGH-SOC_RTC_DRAM_LOW},
+};
+
+
+#define ESP32S2_SOC_RESET_PROCPU    0x1
+#define ESP32S2_SOC_RESET_APPCPU    0x2
+#define ESP32S2_SOC_RESET_PERIPH    0x4
+#define ESP32S2_SOC_RESET_DIG       (ESP32S2_SOC_RESET_PROCPU | ESP32S2_SOC_RESET_APPCPU | ESP32S2_SOC_RESET_PERIPH)
+#define ESP32S2_SOC_RESET_RTC       0x8
+#define ESP32S2_SOC_RESET_ALL       (ESP32S2_SOC_RESET_RTC | ESP32S2_SOC_RESET_DIG)
+
+#define TYPE_ESP32S2_MYUNIMP     "esp32.myunimp"
+
+
+typedef struct Esp32UnimpState {
+    SysBusDevice parent_obj;
+
+    BlockBackend *flash_blk;
+    uint32_t mmu_table[0x1000];
+    MemoryRegion iomem;
+    qemu_irq irq;
+} Esp32UnimpState;
+
+
+typedef struct Esp32S2SocState {
+    /*< private >*/
+    SysBusDevice parent_obj;
+
+    /*< public >*/
+    XtensaCPU cpu[ESP32S2_CPU_COUNT];
+    Esp32DportState dport;
+    ESP32UARTState uart[ESP32S2_UART_COUNT];
+    Esp32GpioState gpio;
+    Esp32RngState rng;
+    Esp32RtcCntlState rtc_cntl;
+    Esp32FrcTimerState frc_timer[ESP32S2_FRC_COUNT];
+    Esp32TimgState timg[ESP32S2_TIMG_COUNT];
+    Esp32SpiState spi[ESP32S2_SPI_COUNT];
+    Esp32ShaState sha;
+    Esp32EfuseState efuse;
+    Esp32UnimpState myunimp;
+    DeviceState *eth;
+
+    MemoryRegion cpu_specific_mem[ESP32S2_CPU_COUNT];
+
+    uint32_t requested_reset;
+} Esp32S2SocState;
+
+
+static void ESP32S2_dig_reset(void *opaque, int n, int level)
+{
+    Esp32S2SocState *s = ESP32S2_SOC(opaque);
+    if (level) {
+        s->requested_reset = ESP32S2_SOC_RESET_DIG;
+        qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
+    }
+}
+
+static void ESP32S2_cpu_reset(void* opaque, int n, int level)
+{
+    Esp32S2SocState *s = ESP32S2_SOC(opaque);
+    if (level) {
+        s->requested_reset = (n == 0) ? ESP32S2_SOC_RESET_PROCPU : ESP32S2_SOC_RESET_APPCPU;
+        qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
+    }
+}
+
+static void remove_cpu_watchpoints(XtensaCPU* xcs)
+{
+    for (int i = 0; i < MAX_NDBREAK; ++i) {
+        if (xcs->env.cpu_watchpoint[i]) {
+            cpu_watchpoint_remove_by_ref(CPU(xcs), xcs->env.cpu_watchpoint[i]);
+            xcs->env.cpu_watchpoint[i] = NULL;
+        }
+    }
+}
+
+static void ESP32S2_soc_reset(DeviceState *dev)
+{
+    Esp32S2SocState *s = ESP32S2_SOC(dev);
+
+    if (s->requested_reset == 0) {
+        s->requested_reset = ESP32S2_SOC_RESET_ALL;
+    }
+    if (s->requested_reset & ESP32S2_SOC_RESET_RTC) {
+        device_cold_reset(DEVICE(&s->rtc_cntl));
+    }
+    if (s->requested_reset & ESP32S2_SOC_RESET_PERIPH) {
+        device_cold_reset(DEVICE(&s->dport));
+        device_cold_reset(DEVICE(&s->sha));
+        device_cold_reset(DEVICE(&s->gpio));
+        for (int i = 0; i < ESP32S2_UART_COUNT; ++i) {
+            device_cold_reset(DEVICE(&s->uart));
+        }
+        for (int i = 0; i < ESP32S2_FRC_COUNT; ++i) {
+            device_cold_reset(DEVICE(&s->frc_timer[i]));
+        }
+        for (int i = 0; i < ESP32S2_TIMG_COUNT; ++i) {
+            device_cold_reset(DEVICE(&s->timg[i]));
+        }
+        for (int i = 0; i < ESP32S2_SPI_COUNT; ++i) {
+            device_cold_reset(DEVICE(&s->spi[i]));
+        }
+        device_cold_reset(DEVICE(&s->efuse));
+        if (s->eth) {
+            device_cold_reset(s->eth);
+        }
+    }
+    if (s->requested_reset & ESP32S2_SOC_RESET_PROCPU) {
+        xtensa_select_static_vectors(&s->cpu[0].env, s->rtc_cntl.stat_vector_sel[0]);
+        remove_cpu_watchpoints(&s->cpu[0]);
+        cpu_reset(CPU(&s->cpu[0]));
+    }
+    /*
+    if (s->requested_reset & ESP32S2_SOC_RESET_APPCPU) {
+        xtensa_select_static_vectors(&s->cpu[1].env, s->rtc_cntl.stat_vector_sel[1]);
+        remove_cpu_watchpoints(&s->cpu[0]);
+        cpu_reset(CPU(&s->cpu[1]));
+    }
+    */
+    s->requested_reset = 0;
+}
+
+static void ESP32S2_cpu_stall(void* opaque, int n, int level)
+{
+    Esp32S2SocState *s = ESP32S2_SOC(opaque);
+
+    bool stall;
+    if (n == 0) {
+        stall = s->rtc_cntl.cpu_stall_state[0];
+    } else {
+        stall = s->rtc_cntl.cpu_stall_state[1] && s->dport.appcpu_stall_state;
+    }
+
+    xtensa_runstall(&s->cpu[n].env, stall);
+}
+
+static void ESP32S2_clk_update(void* opaque, int n, int level)
+{
+    Esp32S2SocState *s = ESP32S2_SOC(opaque);
+    if (!level) {
+        return;
+    }
+
+    /* APB clock */
+    uint32_t apb_clk_freq, cpu_clk_freq;
+    if (s->rtc_cntl.soc_clk == ESP32_SOC_CLK_PLL) {
+        const uint32_t cpu_clk_mul[] = {1, 2, 3};
+        apb_clk_freq = s->rtc_cntl.pll_apb_freq;
+        cpu_clk_freq = cpu_clk_mul[s->dport.cpuperiod_sel] * apb_clk_freq;
+    } else {
+        apb_clk_freq = s->rtc_cntl.xtal_apb_freq;
+        cpu_clk_freq = apb_clk_freq;
+    }
+    qdev_prop_set_int32(DEVICE(&s->frc_timer), "apb_freq", apb_clk_freq);
+    *(uint32_t*)(&s->cpu[0].env.config->clock_freq_khz) = cpu_clk_freq / 1000;
+}
+
+static void ESP32S2_soc_add_periph_device(MemoryRegion *dest, void* dev, hwaddr dport_base_addr)
+{
+    MemoryRegion *mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(dev), 0);
+    memory_region_add_subregion_overlap(dest, dport_base_addr, mr, 0);
+    MemoryRegion *mr_apb = g_new(MemoryRegion, 1);
+    char *name = g_strdup_printf("mr-apb-0x%08x", (uint32_t) dport_base_addr);
+    memory_region_init_alias(mr_apb, OBJECT(dev), name, mr, 0, memory_region_size(mr));
+    memory_region_add_subregion_overlap(dest, dport_base_addr - S2_DR_REG_UART_BASE + APB_REG_BASE, mr_apb, 0);
+    g_free(name);
+}
+
+static void ESP32S2_soc_add_unimp_device(MemoryRegion *dest, const char* name, hwaddr dport_base_addr, size_t size)
+{
+    create_unimplemented_device(name, dport_base_addr, size);
+    char * name_apb = g_strdup_printf("%s-apb", name);
+    create_unimplemented_device(name_apb, dport_base_addr - S2_DR_REG_UART_BASE + APB_REG_BASE, size);
+    g_free(name_apb);
+}
+
+void  stopme(void);
+
+void  stopme(void) {
+    printf("stop\n");
+}
+
+
+static void ESP32S2_soc_realize(DeviceState *dev, Error **errp)
+{
+    Esp32S2SocState *s = ESP32S2_SOC(dev);
+    MachineState *ms = MACHINE(qdev_get_machine());
+
+    const struct MemmapEntry *memmap = ESP32S2_memmap;
+    MemoryRegion *sys_mem = get_system_memory();
+
+    MemoryRegion *dram = g_new(MemoryRegion, 1);
+    MemoryRegion *iram = g_new(MemoryRegion, 1);
+    MemoryRegion *drom = g_new(MemoryRegion, 1);
+    MemoryRegion *irom = g_new(MemoryRegion, 1);
+    MemoryRegion *irom1 = g_new(MemoryRegion, 1);
+
+    MemoryRegion *icache0 = g_new(MemoryRegion, 1);
+    MemoryRegion *icache1 = g_new(MemoryRegion, 1);
+    MemoryRegion *rtcslow = g_new(MemoryRegion, 1);
+    MemoryRegion *rtcfast_i = g_new(MemoryRegion, 1);
+    MemoryRegion *rtcfast_d = g_new(MemoryRegion, 1);
+
+    memory_region_init_rom(irom, NULL, "esp32.irom",
+                           memmap[ESP32S2_MEMREGION_IROM].size, &error_fatal);
+    memory_region_add_subregion(sys_mem, memmap[ESP32S2_MEMREGION_IROM].base, irom);
+
+    memory_region_init_rom(irom1, NULL, "esp32.irom1",
+                           memmap[ESP32S2_MEMREGION_IROM1].size, &error_fatal);
+    memory_region_add_subregion(sys_mem, memmap[ESP32S2_MEMREGION_IROM1].base, irom1);
+
+
+
+    memory_region_init_alias(drom, NULL, "esp32.drom", irom, 0x60000, memmap[ESP32S2_MEMREGION_DROM].size);
+    memory_region_add_subregion(sys_mem, memmap[ESP32S2_MEMREGION_DROM].base, drom);
+
+    memory_region_init_ram(dram, NULL, "esp32.dram",
+                           memmap[ESP32S2_MEMREGION_DRAM].size, &error_fatal);
+    memory_region_add_subregion(sys_mem, memmap[ESP32S2_MEMREGION_DRAM].base, dram);
+
+    memory_region_init_ram(iram, NULL, "esp32.iram",
+                           memmap[ESP32S2_MEMREGION_IRAM].size, &error_fatal);
+    memory_region_add_subregion(sys_mem, memmap[ESP32S2_MEMREGION_IRAM].base, iram);
+
+    memory_region_init_ram(icache0, NULL, "esp32.icache0",
+                           memmap[ESP32S2_MEMREGION_ICACHE0].size, &error_fatal);
+    memory_region_add_subregion(sys_mem, memmap[ESP32S2_MEMREGION_ICACHE0].base, icache0);
+
+    memory_region_init_ram(icache1, NULL, "esp32.icache1",
+                           memmap[ESP32S2_MEMREGION_ICACHE1].size, &error_fatal);
+    memory_region_add_subregion(sys_mem, memmap[ESP32S2_MEMREGION_ICACHE1].base, icache1);
+
+    memory_region_init_ram(rtcslow, NULL, "esp32.rtcslow",
+                           memmap[ESP32S2_MEMREGION_RTCSLOW].size, &error_fatal);
+    memory_region_add_subregion(sys_mem, memmap[ESP32S2_MEMREGION_RTCSLOW].base, rtcslow);
+
+    /* RTC Fast memory is only accessible by the PRO CPU */
+
+    memory_region_init_ram(rtcfast_i, NULL, "esp32.rtcfast_i",
+                           memmap[ESP32S2_MEMREGION_RTCSLOW].size, &error_fatal);
+    memory_region_add_subregion(&s->cpu_specific_mem[0], memmap[ESP32S2_MEMREGION_RTCFAST_I].base, rtcfast_i);
+
+    memory_region_init_alias(rtcfast_d, NULL, "esp32.rtcfast_d", rtcfast_i, 0, memmap[ESP32S2_MEMREGION_RTCFAST_D].size);
+    memory_region_add_subregion(&s->cpu_specific_mem[0], memmap[ESP32S2_MEMREGION_RTCFAST_D].base, rtcfast_d);
+
+    for (int i = 0; i < ms->smp.cpus; ++i) {
+        object_property_set_bool(OBJECT(&s->cpu[i]), true, "realized", &error_abort);
+    }
+
+    object_property_set_bool(OBJECT(&s->dport), true, "realized", &error_abort);
+// S2_DR_REG_SYSTEM_BASE
+    memory_region_add_subregion(sys_mem,0x3F4C1000 /*S2_DR_REG_SYSTEM_BASE*/,
+                                sysbus_mmio_get_region(SYS_BUS_DEVICE(&s->dport), 0));
+    //qdev_connect_gpio_out_named(DEVICE(&s->dport), ESP32S2_DPORT_APPCPU_RESET_GPIO, 0,
+    //                            qdev_get_gpio_in_named(dev, ESP32S2_RTC_CPU_RESET_GPIO, 1));
+    //qdev_connect_gpio_out_named(DEVICE(&s->dport), ESP32S2_DPORT_APPCPU_STALL_GPIO, 0,
+    //                            qdev_get_gpio_in_named(dev, ESP32S2_RTC_CPU_STALL_GPIO, 1));
+    //qdev_connect_gpio_out_named(DEVICE(&s->rtc_cntl), ESP32S2_DPORT_CLK_UPDATE_GPIO, 0,
+    //                            qdev_get_gpio_in_named(dev, ESP32S2_RTC_CLK_UPDATE_GPIO, 0));
+    DeviceState* intmatrix_dev = DEVICE(&s->dport.intmatrix);
+
+    if (s->dport.flash_blk) {
+        for (int i = 0; i < ESP32S2_CPU_COUNT; ++i) {
+            Esp32CacheRegionState *drom0 = &s->dport.cache_state[i].drom0;
+            memory_region_add_subregion_overlap(&s->cpu_specific_mem[i], drom0->base, &drom0->mem, -1);
+            Esp32CacheRegionState *iram0 = &s->dport.cache_state[i].iram0;
+            memory_region_add_subregion_overlap(&s->cpu_specific_mem[i], iram0->base, &iram0->mem, -1);
+        }
+    }
+
+    object_property_set_bool(OBJECT(&s->sha), true, "realized", &error_abort);
+    ESP32S2_soc_add_periph_device(sys_mem, &s->sha, S2_DR_REG_SHA_BASE);
+
+    object_property_set_bool(OBJECT(&s->rtc_cntl), true, "realized", &error_abort);
+    ESP32S2_soc_add_periph_device(sys_mem, &s->rtc_cntl, S2_DR_REG_RTCCNTL_BASE);
+
+    qdev_connect_gpio_out_named(DEVICE(&s->rtc_cntl), ESP32_RTC_DIG_RESET_GPIO, 0,
+                                qdev_get_gpio_in_named(dev, ESP32_RTC_DIG_RESET_GPIO, 0));
+    qdev_connect_gpio_out_named(DEVICE(&s->rtc_cntl), ESP32_RTC_CLK_UPDATE_GPIO, 0,
+                                qdev_get_gpio_in_named(dev, ESP32_RTC_CLK_UPDATE_GPIO, 0));
+    for (int i = 0; i < ms->smp.cpus; ++i) {
+        qdev_connect_gpio_out_named(DEVICE(&s->rtc_cntl), ESP32_RTC_CPU_RESET_GPIO, i,
+                                    qdev_get_gpio_in_named(dev, ESP32_RTC_CPU_RESET_GPIO, i));
+        qdev_connect_gpio_out_named(DEVICE(&s->rtc_cntl), ESP32_RTC_CPU_STALL_GPIO, i,
+                                    qdev_get_gpio_in_named(dev, ESP32_RTC_CPU_STALL_GPIO, i));
+    }
+
+    object_property_set_bool(OBJECT(&s->gpio), true, "realized", &error_abort);
+    ESP32S2_soc_add_periph_device(sys_mem, &s->gpio, S2_DR_REG_GPIO_BASE);
+
+    stopme();
+
+    for (int i = 0; i < ESP32S2_UART_COUNT; ++i) {
+        const hwaddr uart_base[] = {S2_DR_REG_UART_BASE, S2_DR_REG_UART1_BASE};
+        object_property_set_bool(OBJECT(&s->uart[i]), true, "realized", &error_abort);
+        ESP32S2_soc_add_periph_device(sys_mem, &s->uart[i], uart_base[i]);
+        sysbus_connect_irq(SYS_BUS_DEVICE(&s->uart[i]), 0,
+                           qdev_get_gpio_in(intmatrix_dev, ETS_UART0_INTR_SOURCE + i));
+    }
+
+    for (int i = 0; i < ESP32S2_FRC_COUNT; ++i) {
+        object_property_set_bool(OBJECT(&s->frc_timer[i]), true, "realized", &error_abort);
+
+        ESP32S2_soc_add_periph_device(sys_mem, &s->frc_timer[i], S2_DR_REG_FRC_TIMER_BASE + i * ESP32_FRC_TIMER_STRIDE);
+
+        sysbus_connect_irq(SYS_BUS_DEVICE(&s->frc_timer[i]), 0,
+                           qdev_get_gpio_in(intmatrix_dev, ETS_TIMER1_INTR_SOURCE + i));
+    }
+
+    for (int i = 0; i < ESP32S2_TIMG_COUNT; ++i) {
+        const hwaddr timg_base[] = {S2_DR_REG_TIMERGROUP0_BASE, S2_DR_REG_TIMERGROUP1_BASE};
+        object_property_set_bool(OBJECT(&s->timg[i]), true, "realized", &error_abort);
+
+        ESP32S2_soc_add_periph_device(sys_mem, &s->timg[i], timg_base[i]);
+    }
+
+    for (int i = 0; i < ESP32S2_SPI_COUNT; ++i) {
+        const hwaddr spi_base[] = {
+            S2_DR_REG_SPI0_BASE, S2_DR_REG_SPI1_BASE, S2_DR_REG_SPI2_BASE, S2_DR_REG_SPI3_BASE
+        };
+        object_property_set_bool(OBJECT(&s->spi[i]), true, "realized", &error_abort);
+
+        ESP32S2_soc_add_periph_device(sys_mem, &s->spi[i], spi_base[i]);
+
+        sysbus_connect_irq(SYS_BUS_DEVICE(&s->spi[i]), 0,
+                           qdev_get_gpio_in(intmatrix_dev, ETS_SPI0_INTR_SOURCE + i));
+    }
+
+//OLAS random
+    object_property_set_bool(OBJECT(&s->rng), true, "realized", &error_abort);
+    ESP32S2_soc_add_periph_device(sys_mem, &s->rng, 0x60035110);
+
+    object_property_set_bool(OBJECT(&s->efuse), true, "realized", &error_abort);
+    ESP32S2_soc_add_periph_device(sys_mem, &s->efuse, S2_DR_REG_EFUSE_BASE);
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->efuse), 0,
+                       qdev_get_gpio_in(intmatrix_dev, ETS_EFUSE_INTR_SOURCE));
+
+
+
+
+    ESP32S2_soc_add_unimp_device(sys_mem, "esp32.extmem", S2_DR_REG_EXTMEM_BASE, 0x1000);
+//  0x6000E044
+    ESP32S2_soc_add_unimp_device(sys_mem, "esp32.analog", 0x6000E000, 0x1000);
+    ESP32S2_soc_add_unimp_device(sys_mem, "esp32.rtcio", S2_DR_REG_RTCIO_BASE, 0x400);
+    ESP32S2_soc_add_unimp_device(sys_mem, "esp32.rtcio", S2_DR_REG_SENS_BASE, 0x400);
+    ESP32S2_soc_add_unimp_device(sys_mem, "esp32.iomux", S2_DR_REG_IO_MUX_BASE, 0x2000);
+    ESP32S2_soc_add_unimp_device(sys_mem, "esp32.hinf", S2_DR_REG_HINF_BASE, 0x1000);
+    ESP32S2_soc_add_unimp_device(sys_mem, "esp32.slc", S2_DR_REG_SLC_BASE, 0x1000);
+    ESP32S2_soc_add_unimp_device(sys_mem, "esp32.slchost", S2_DR_REG_SLCHOST_BASE, 0x1000);
+    ESP32S2_soc_add_unimp_device(sys_mem, "esp32.apbctrl", S2_DR_REG_APB_CTRL_BASE, 0x1000);
+    ESP32S2_soc_add_unimp_device(sys_mem, "esp32.i2s0", S2_DR_REG_I2S_BASE, 0x1000);
+    //ESP32S2_soc_add_unimp_device(sys_mem, "esp32.i2s1", S2_DR_REG_I2S1_BASE, 0x1000);
+    ESP32S2_soc_add_unimp_device(sys_mem, "esp32.i2c0", S2_DR_REG_I2C_EXT_BASE, 0x1000);
+    ESP32S2_soc_add_unimp_device(sys_mem, "esp32.i2c1", S2_DR_REG_I2C1_EXT_BASE, 0x1000);
+    ESP32S2_soc_add_unimp_device(sys_mem, "esp32.usb", S2_DR_REG_USB_BASE, 0x1000);
+    //ESP32S2_soc_add_unimp_device(sys_mem, "esp32.rndreg", 0x60035000, 0x1000);
+
+    
+
+    //ESP32S2_soc_add_unimp_device(sys_mem, "esp32.unknown", 0x61801000, 0x1000);
+
+    object_property_set_bool(OBJECT(&s->myunimp), true, "realized", &error_abort);
+    ESP32S2_soc_add_periph_device(sys_mem, &s->myunimp, 0x61800000);
+
+/*
+$2 = 0x61800040
+(gdb) p/x $a9
+$3 = 0x0
+(gdb) ni
+0x400181fa in Cache_Invalidate_ICache_Items ()
+(gdb) p/x $a3
+$4 = 0x200
+*/
+    
+
+
+    qemu_register_reset((QEMUResetHandler*) ESP32S2_soc_reset, dev);
+}
+
+static void esp32s2_soc_init(Object *obj)
+{
+    Esp32S2SocState *s = ESP32S2_SOC(obj);
+    MachineState *ms = MACHINE(qdev_get_machine());
+    char name[16];
+
+    MemoryRegion *system_memory = get_system_memory();
+
+    for (int i = 0; i < ms->smp.cpus; ++i) {
+        snprintf(name, sizeof(name), "cpu%d", i);
+        object_initialize_child(obj, name, &s->cpu[i], sizeof(s->cpu[i]), TYPE_ESP32S2_CPU, &error_abort, NULL);
+
+        const uint32_t cpuid[ESP32S2_CPU_COUNT] = { 0xcdcd /*, 0xabab */};
+        s->cpu[i].env.sregs[PRID] = cpuid[i];
+
+        snprintf(name, sizeof(name), "cpu%d-mem", i);
+        memory_region_init(&s->cpu_specific_mem[i], NULL, name, UINT32_MAX);
+
+        CPUState* cs = CPU(&s->cpu[i]);
+        cs->num_ases = 1;
+        cpu_address_space_init(cs, 0, "cpu-memory", &s->cpu_specific_mem[i]);
+
+        MemoryRegion *cpu_view_sysmem = g_new(MemoryRegion, 1);
+        snprintf(name, sizeof(name), "cpu%d-sysmem", i);
+        memory_region_init_alias(cpu_view_sysmem, NULL, name, system_memory, 0, UINT32_MAX);
+        memory_region_add_subregion_overlap(&s->cpu_specific_mem[i], 0, cpu_view_sysmem, 0);
+        cs->memory = &s->cpu_specific_mem[i];
+    }
+
+    for (int i = 0; i < ESP32S2_UART_COUNT; ++i) {
+        snprintf(name, sizeof(name), "uart%d", i);
+        object_initialize_child(obj, name, &s->uart[i], sizeof(s->uart[i]),
+                                TYPE_ESP32_UART, &error_abort, NULL);
+    }
+
+    object_property_add_alias(obj, "serial0", OBJECT(&s->uart[0]), "chardev",
+                              &error_abort);
+
+    object_initialize_child(obj, "gpio", &s->gpio, sizeof(s->gpio),
+                                TYPE_ESP32_GPIO, &error_abort, NULL);
+
+    object_initialize_child(obj, "dport", &s->dport, sizeof(s->dport),
+                            TYPE_ESP32S2_DPORT, &error_abort, NULL);
+
+    object_initialize_child(obj, "rtc_cntl", &s->rtc_cntl, sizeof(s->rtc_cntl),
+                            TYPE_ESP32_RTC_CNTL, &error_abort, NULL);
+
+
+    object_initialize_child(obj, "myunimp", &s->myunimp, sizeof(s->myunimp),
+                                TYPE_ESP32S2_MYUNIMP, &error_abort, NULL);
+
+
+
+    for (int i = 0; i < ESP32_FRC_COUNT; ++i) {
+        snprintf(name, sizeof(name), "frc%d", i);
+        object_initialize_child(obj, name, &s->frc_timer[i], sizeof(s->frc_timer[i]),
+                                TYPE_ESP32_FRC_TIMER, &error_abort, NULL);
+    }
+
+    for (int i = 0; i < ESP32_TIMG_COUNT; ++i) {
+        snprintf(name, sizeof(name), "timg%d", i);
+        object_initialize_child(obj, name, &s->timg[i], sizeof(s->timg[i]),
+                                TYPE_ESP32_TIMG, &error_abort, NULL);
+    }
+
+    for (int i = 0; i < ESP32S2_SPI_COUNT; ++i) {
+        snprintf(name, sizeof(name), "spi%d", i);
+        object_initialize_child(obj, name, &s->spi[i], sizeof(s->spi[i]),
+                                TYPE_ESP32_SPI, &error_abort, NULL);
+    }
+
+    object_initialize_child(obj, "rng", &s->rng, sizeof(s->rng),
+                            TYPE_ESP32_RNG, &error_abort, NULL);
+
+    object_initialize_child(obj, "sha", &s->sha, sizeof(s->sha),
+                                TYPE_ESP32S2_SHA, &error_abort, NULL);
+
+    object_initialize_child(obj, "efuse", &s->efuse, sizeof(s->efuse),
+                                    TYPE_ESP32_EFUSE, &error_abort, NULL);
+
+
+    qdev_init_gpio_in_named(DEVICE(s), ESP32S2_dig_reset, ESP32_RTC_DIG_RESET_GPIO, 1);
+    qdev_init_gpio_in_named(DEVICE(s), ESP32S2_cpu_reset, ESP32_RTC_CPU_RESET_GPIO, ESP32S2_CPU_COUNT);
+    qdev_init_gpio_in_named(DEVICE(s), ESP32S2_cpu_stall, ESP32_RTC_CPU_STALL_GPIO, ESP32S2_CPU_COUNT);
+    qdev_init_gpio_in_named(DEVICE(s), ESP32S2_clk_update, ESP32_RTC_CLK_UPDATE_GPIO, 1);
+
+    const char *rom_filename = "s2rom.bin";
+    const char *irom_filename = "irom1.bin";
+
+    irom_filename = qemu_find_file(QEMU_FILE_TYPE_BIOS, irom_filename);
+    if (!irom_filename ||
+        load_image_targphys(irom_filename, 0x3ffa0000, 64*1024) < 0) { 
+        error_report("unable to load ROM image '%s'\n", irom_filename);
+        exit(EXIT_FAILURE);
+    }
+
+
+    rom_filename = qemu_find_file(QEMU_FILE_TYPE_BIOS, rom_filename);
+    if (!rom_filename ||
+        load_image_targphys(rom_filename, 0x40000000, 128*1024) < 0) { 
+        error_report("unable to load ROM image '%s'\n", rom_filename);
+        exit(EXIT_FAILURE);
+    }
+/*
+//MemTxResult address_space_write_rom(AddressSpace *as, hwaddr addr,
+//                                    MemTxAttrs attrs,
+//                                    const uint8_t *buf, hwaddr len);
+
+            CPUState* cst = CPU(&s->cpu[0]);
+            dump_mmu(&s->cpu[0]);
+
+            
+            // Patch rom, ets_unpack_flash_code
+             
+            //AddressSpace *as=cpu_get_address_space(cst , 1);
+
+            //address_space_write_rom(as,0x40010f58,MEMTXATTRS_UNSPECIFIED, patch_ret, sizeof(patch_ret));
+*/
+
+
+}
+
+static Property ESP32S2_soc_properties[] = {
+    DEFINE_PROP_END_OF_LIST(),
+};
+
+static void ESP32S2_soc_class_init(ObjectClass *klass, void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+
+    dc->reset = ESP32S2_soc_reset;
+    dc->realize = ESP32S2_soc_realize;
+     device_class_set_props(dc, ESP32S2_soc_properties);
+}
+
+static const TypeInfo ESP32S2_soc_info = {
+    .name = TYPE_ESP32S2_SOC,
+    .parent = TYPE_SYS_BUS_DEVICE,
+    .instance_size = sizeof(Esp32S2SocState),
+    .instance_init = esp32s2_soc_init,
+    .class_init = ESP32S2_soc_class_init
+};
+
+static void ESP32S2_soc_register_types(void)
+{
+    type_register_static(&ESP32S2_soc_info);
+}
+
+type_init(ESP32S2_soc_register_types)
+
+
+static uint64_t translate_phys_addr(void *opaque, uint64_t addr)
+{
+    XtensaCPU *cpu = opaque;
+
+    return cpu_get_phys_page_debug(CPU(cpu), addr);
+}
+
+static void ESP32S2_machine_init_spi_flash(MachineState *machine, Esp32S2SocState *s, BlockBackend* blk)
+{
+    /* "main" flash chip is attached to SPI1 */
+    DeviceState *spi_master = DEVICE(&s->spi[1]);
+    SSIBus* spi_bus = (SSIBus *)qdev_get_child_bus(spi_master, "spi");
+    DeviceState *flash_dev = ssi_create_slave_no_init(spi_bus, "gd25q32");
+    qdev_prop_set_drive(flash_dev, "drive", blk, &error_fatal);
+    qdev_init_nofail(flash_dev);
+    qdev_connect_gpio_out_named(spi_master, SSI_GPIO_CS, 0,
+                                qdev_get_gpio_in_named(flash_dev, SSI_GPIO_CS, 0));
+}
+
+static void ESP32S2_machine_init_openeth(Esp32S2SocState *ss)
+{
+    SysBusDevice *sbd;
+    NICInfo *nd = &nd_table[0];
+    MemoryRegion* sys_mem = get_system_memory();
+    hwaddr reg_base = ADDR_FIFO_USB_0;
+    hwaddr desc_base = reg_base + 0x400;
+    qemu_irq irq = qdev_get_gpio_in(DEVICE(&ss->dport.intmatrix), ETS_ETH_MAC_INTR_SOURCE);
+
+    const char* type_openeth = "open_eth";
+    if (nd->used && nd->model && strcmp(nd->model, type_openeth) == 0) {
+        DeviceState* open_eth_dev = qdev_create(NULL, type_openeth);
+        ss->eth = open_eth_dev;
+        qdev_set_nic_properties(open_eth_dev, nd);
+        qdev_init_nofail(open_eth_dev);
+
+        sbd = SYS_BUS_DEVICE(open_eth_dev);
+        sysbus_connect_irq(sbd, 0, irq);
+        memory_region_add_subregion(sys_mem, reg_base, sysbus_mmio_get_region(sbd, 0));
+        memory_region_add_subregion(sys_mem, desc_base, sysbus_mmio_get_region(sbd, 1));
+    }
+}
+/**************/
+
+#define ESP32S2_UNIMP(obj) OBJECT_CHECK(Esp32UnimpState, (obj), TYPE_ESP32S2_MYUNIMP)
+
+#define ESP32S2_UNIMP_VAL 0x0a 
+
+static uint64_t ESP32S2_unimp_read(void *opaque, hwaddr addr, unsigned int size)
+{
+    Esp32UnimpState *s = ESP32S2_UNIMP(opaque);
+    //printf("unimp read  %08X\n",(unsigned int)addr);
+
+    uint64_t r = 0;
+    switch (addr) {
+    case 0x40:
+       r=0x80000;
+       break;
+    case 0x44:
+    case 0x114:
+    case 0x60:
+        r = 0x200;
+        break;
+
+    case 0x1200 ... 0x1400: 
+    {
+        r=s->mmu_table[addr-0x1200];
+    }
+    break;
+
+    default:
+        break;
+    }
+    return r;
+}
+
+//#define SOC_DROM_LOW 0x3f000000
+/* Use first 63 blocks in MMU for bootloader_mmap,
+   63th block for bootloader_flash_read
+*/
+#define MMU_BLOCK0_VADDR  SOC_DROM_LOW
+#define MMU_SIZE          (0x3f0000)
+#define MMU_BLOCK63_VADDR (MMU_BLOCK0_VADDR + MMU_SIZE)
+#define FLASH_READ_VADDR MMU_BLOCK63_VADDR
+
+#define MMU_FREE_PAGES    (MMU_SIZE / FLASH_BLOCK_SIZE)
+
+#if 0
+                    
+/**
+ * @brief Set ICache mmu mapping.
+ *        Please do not call this function in your SDK application.
+ *
+ * @param  uint32_t ext_ram : DPORT_MMU_ACCESS_FLASH for flash,
+ DPORT_MMU_ACCESS_SPIRAM for spiram, DPORT_MMU_INVALID for invalid.
+    *
+    * @param  uint32_t vaddr : virtual address in CPU address space.
+    *                              Can be Iram0,Iram1,Irom0,Drom0 and AHB buses
+address.
+    *                              Should be aligned by psize.
+    *
+    * @param  uint32_t paddr : physical address in external memory.
+    *                              Should be aligned by psize.
+    *
+    * @param  uint32_t psize : page size of ICache, in kilobytes. Should be 64
+here.
+    *
+    * @param  uint32_t num : pages to be set.
+    *
+    * @param  uint32_t fixed : 0 for physical pages grow with virtual pages,
+other for virtual pages map to same physical page.
+    *
+    * @return uint32_t: error status
+    *                   0 : mmu set success
+    *                   2 : vaddr or paddr is not aligned
+    *                   3 : psize error
+    *                   4 : vaddr is out of range
+    */ 
+
+uint Cache_Ibus_MMU_Set(uint ext_ram,uint vaddr,uint paddr,uint psize,uint num,int fixed)
+{
+  uint ret;
+  uint uVar2;
+  uint *puVar3;
+  uint uVar4;
+  int iVar5;
+  uint uVar6;
+  
+  ret = 2;
+  if (((0xffff >> ((char)(0x40 / psize) - 1U & 0x1f) & (vaddr | paddr)) == 0) &&
+     (ret = 3, psize == 0x40)) {
+    do {
+      if (num == 0) {
+        return 0;
+      }
+      uVar4 = vaddr + 0x400000 & 0xffc00000;
+      iVar5 = uVar4 - vaddr;
+      uVar6 = iVar5 >> 0x10;
+      if (num <= uVar6) {
+        uVar6 = num;
+      }
+      if (vaddr + 0xc1000000 < 0x400000) {
+        uVar2 = (vaddr >> 0x10 & 0x3f) + 0x80;
+      }
+      else {
+        if (vaddr + 0xc0000000 < 0x400000) {
+          uVar2 = vaddr >> 0x10 & 0x3f;
+        }
+        else {
+          if (0x3fffff < vaddr + 0xbfc00000) {
+              return 4;  // vaddr is out of range
+          }
+          uVar2 = (vaddr >> 0x10 & 0x3f) + 0x40;
+        }
+      }
+      puVar3 = (uint *)(&DAT_61801000 + uVar2 * 4);
+      uVar2 = 0;
+      while (uVar2 != uVar6) {
+        if (fixed == 0) {
+          *puVar3 = uVar2 + (paddr >> 0x10) | ext_ram;
+        }
+        else {
+          *puVar3 = paddr >> 0x10 | ext_ram;
+        }
+        uVar2 = uVar2 + 1;
+        puVar3 = puVar3 + 1;
+      }
+      num = num - uVar2;
+      vaddr = uVar4;
+      if (fixed == 0) {
+        paddr = paddr + iVar5;
+      }
+    } while( true );
+  }
+  return ret;
+}
+
+// The fun stops at verify_image_header()
+
+read RTC_CNTL_RESET_STATE_REG
+unimp write  000012FC,00008001
+
+
+#endif
+
+
+
+
+static void ESP32S2_unimp_write(void *opaque, hwaddr addr,
+                       uint64_t value, unsigned int size)
+{
+    Esp32UnimpState *s = ESP32S2_UNIMP(opaque);
+    //printf("unimp write  %08X,%08X\n",(unsigned int)addr,(unsigned int)value);
+    //if (value!=0x4000) printf("unimp write  %08X,%08X\n",(unsigned int)addr,(unsigned int)value);
+
+    switch (addr) {
+        // 0x61801200
+        case 0x1200 ... 0x1400: 
+        {
+            uint32_t tmp_flash_cache[ESP32S2_CACHE_PAGE_SIZE];
+            s->mmu_table[addr-0x1200]=value;
+            // /sizeof(uint32_t)
+            //uint32_t mmu_entry = value;
+            //uint8_t* cache_data = (uint8_t*) memory_region_get_ram_ptr(&crs->mem);
+            // 0x3f008000
+
+           // (const esp_partition_info_t *) 0x3f008000
+            uint32_t phys_addr = 0x3f000000 + ((addr-0x1200)/4) * ESP32S2_CACHE_PAGE_SIZE;
+            uint32_t flash_addr =(value & 0x3FFF) << 16;
+            //uint32_t* cache_page = (uint32_t*) (cache_data + i * ESP32S2_CACHE_PAGE_SIZE);
+
+            if ((s->mmu_table[addr-0x1200]!=0x4000) && value==0x4000) {
+                for(int reset=0;reset<ESP32S2_CACHE_PAGE_SIZE;reset++) {
+                    tmp_flash_cache[reset]=0xbaadbaad ;
+                }
+                cpu_physical_memory_write(phys_addr, (char *)tmp_flash_cache, ESP32S2_CACHE_PAGE_SIZE );
+            }
+
+
+            if ((value & 0x8000) == 0x8000) {
+                printf("unimp write  %08X,%08X\n",(unsigned int)addr,(unsigned int)value);
+                printf("MMU Map flash %08X to %08X\n",flash_addr,phys_addr);
+                blk_pread(s->flash_blk, flash_addr, /*cache_page*/tmp_flash_cache, ESP32S2_CACHE_PAGE_SIZE);
+                printf("%08X,%08X,b %08X,p %08X\n",*(uint32_t *)tmp_flash_cache,*(uint32_t *)&tmp_flash_cache[4],*(uint32_t *)&tmp_flash_cache[0x1000],*(uint32_t *)&tmp_flash_cache[0x8000]);
+                cpu_physical_memory_write(phys_addr, tmp_flash_cache, ESP32S2_CACHE_PAGE_SIZE );
+            }
+        }
+    }
+
+}
+
+static const MemoryRegionOps unimp_ops = {
+    .read =  ESP32S2_unimp_read,
+    .write = ESP32S2_unimp_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+};
+
+static void ESP32S2_unimp_reset(DeviceState *dev)
+{ 
+     Esp32UnimpState *s = ESP32S2_UNIMP(dev);
+
+    for (int i = 0; i < ESP32S2_CACHE_PAGES_PER_REGION; ++i) {
+        s->mmu_table[i] = ESP32S2_CACHE_MMU_ENTRY_CHANGED;
+    }
+
+}
+
+static void ESP32S2_unimp_realize(DeviceState *dev, Error **errp)
+{
+}
+
+
+
+static void ESP32S2_unimp_init(Object *obj)
+{
+    Esp32UnimpState *s = ESP32S2_UNIMP(obj);
+    SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
+
+    memory_region_init_io(&s->iomem, obj, &unimp_ops, s,
+                          TYPE_ESP32S2_MYUNIMP, 0x2000);
+    sysbus_init_mmio(sbd, &s->iomem);
+    sysbus_init_irq(sbd, &s->irq);
+}
+
+static Property ESP32S2_gpio_properties[] = {
+    DEFINE_PROP_DRIVE("flash", Esp32DportState, flash_blk),
+    DEFINE_PROP_END_OF_LIST(),
+};
+
+static void ESP32S2_unimp_class_init(ObjectClass *klass, void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+
+    dc->reset = ESP32S2_unimp_reset;
+    dc->realize = ESP32S2_unimp_realize;
+    device_class_set_props(dc,ESP32S2_gpio_properties);
+}
+
+static const TypeInfo ESP32S2_gpio_info = {
+    .name = TYPE_ESP32S2_MYUNIMP,
+    .parent = TYPE_SYS_BUS_DEVICE,
+    .instance_size = sizeof(Esp32UnimpState),
+    .instance_init = ESP32S2_unimp_init,
+    .class_init = ESP32S2_unimp_class_init
+};
+
+static void ESP32S2_gpio_register_types(void)
+{
+    type_register_static(&ESP32S2_gpio_info);
+}
+
+type_init(ESP32S2_gpio_register_types)
+
+
+
+/*************/
+
+static void ESP32S2_machine_inst_init(MachineState *machine)
+{
+    Esp32S2SocState *s = g_new0(Esp32S2SocState, 1);
+
+    BlockBackend* blk = NULL;
+    DriveInfo *dinfo = drive_get_next(IF_MTD);
+    if (dinfo) {
+        qemu_log("Adding SPI flash device\n");
+        blk = blk_by_legacy_dinfo(dinfo);
+    } else {
+        qemu_log("Not initializing SPI Flash\n");
+    }
+
+    qemu_log("Init SOC\n");
+
+    object_initialize_child(OBJECT(machine), "soc", s, sizeof(*s),
+                            TYPE_ESP32S2_SOC, &error_abort, NULL);
+
+    qemu_log("Done\n");
+
+    if (blk) {
+        s->myunimp.flash_blk = blk;
+    }
+
+    if (blk) {
+        s->dport.flash_blk = blk;
+    }
+    qdev_prop_set_chr(DEVICE(s), "serial0", serial_hd(0));
+
+    object_property_set_bool(OBJECT(s), true, "realized", &error_abort);
+
+    if (blk) {
+        ESP32S2_machine_init_spi_flash(machine, s, blk);
+    }
+
+    ESP32S2_machine_init_openeth(s);
+
+    /* Need MMU initialized prior to ELF loading,
+     * so that ELF gets loaded into virtual addresses
+     */
+    cpu_reset(CPU(&s->cpu[0]));
+ 
+   /*
+     MemoryRegion *system_memory = get_system_memory();
+    // TODO, Figure out MMU mapping and related finetuning
+      MemoryRegion *ram;
+      ram = g_malloc(sizeof(*ram));
+      memory_region_init_ram(ram, NULL, "esp32.iram0", 0x20000000,  // 00000
+                           &error_abort);
+
+      vmstate_register_ram_global(ram);
+      memory_region_add_subregion(system_memory, 0x20000000, ram);
+    */
+
+    const char *load_elf_filename = NULL;
+    if (machine->firmware) {
+        load_elf_filename = machine->firmware;
+    }
+    if (machine->kernel_filename) {
+        qemu_log("Loading elf.\n");
+        load_elf_filename = machine->kernel_filename;
+    }
+
+    if (load_elf_filename) {
+        uint64_t elf_entry;
+        uint64_t elf_lowaddr;
+        int success = load_elf(load_elf_filename, NULL,
+                               translate_phys_addr, &s->cpu[0],
+                               &elf_entry, &elf_lowaddr,
+                               NULL, NULL, 0, EM_XTENSA, 0, 0);
+        if (success > 0) {
+            //s->cpu[0].env.pc = elf_entry;
+
+            printf("Elf entry %08X\n",(unsigned int)elf_entry);
+            static const uint8_t jx_a0[] = {
+                0xa0, 0, 0,
+            };            
+            s->cpu[0].env.regs[0] = elf_entry;
+
+            cpu_physical_memory_write(s->cpu[0].env.pc, jx_a0, sizeof(jx_a0));
+
+        } else {
+            qemu_log("Failed loading elf.\n"); 
+            s->cpu[0].env.pc = elf_entry;
+        }
+    } else {
+        /*
+        char *rom_binary = qemu_find_file(QEMU_FILE_TYPE_BIOS, "esp32-r0-rom.bin");
+        if (rom_binary == NULL) {
+            error_report("Error: -bios argument not set, and ROM code binary not found");
+            exit(1);
+        }
+
+        int size = load_image_targphys(rom_binary, ESP32S2_memmap[ESP32S2_MEMREGION_IROM].base, ESP32S2_memmap[ESP32S2_MEMREGION_IROM].size);
+        if (size < 0) {
+            error_report("Error: could not load ROM binary '%s'", rom_binary);
+            exit(1);
+        }
+        g_free(rom_binary);
+                */
+
+    }
+}
+
+/* Initialize machine type */
+static void ESP32S2_machine_init(MachineClass *mc)
+{
+    mc->desc = "Espressif ESP32S2 machine";
+    mc->init = ESP32S2_machine_inst_init;
+    mc->max_cpus = 1;
+    mc->default_cpus = 1;
+}
+
+DEFINE_MACHINE("esp32s2", ESP32S2_machine_init)
+
