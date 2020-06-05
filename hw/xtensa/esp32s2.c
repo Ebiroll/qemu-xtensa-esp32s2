@@ -19,8 +19,8 @@
 #include "hw/sysbus.h"
 #include "target/xtensa/cpu.h"
 #include "hw/misc/esp32s2_reg.h"
-#include "hw/char/esp32_uart.h"
-#include "hw/gpio/esp32_gpio.h"
+#include "hw/char/esp32s2_uart.h"
+#include "hw/gpio/esp32s2_gpio.h"
 #include "hw/misc/esp32s2_dport.h"
 #include "hw/misc/esp32_rtc_cntl.h"
 #include "hw/misc/esp32_rng.h"
@@ -136,14 +136,15 @@ typedef struct Esp32S2SocState {
     /*< public >*/
     XtensaCPU cpu[ESP32S2_CPU_COUNT];
     Esp32DportState dport;
-    ESP32UARTState uart[ESP32S2_UART_COUNT];
-    Esp32GpioState gpio;
+    ESP32S2UARTState uart[ESP32S2_UART_COUNT];
+    Esp32s2GpioState gpio;
     Esp32RngState rng;
     Esp32RtcCntlState rtc_cntl;
     Esp32FrcTimerState frc_timer[ESP32S2_FRC_COUNT];
     Esp32TimgState timg[ESP32S2_TIMG_COUNT];
+    Esp32TimgState systimer;
     Esp32SpiState spi[ESP32S2_SPI_COUNT];
-    Esp32ShaState sha;
+    Esp32S2ShaState sha;
     Esp32EfuseState efuse;
     Esp32UnimpState myunimp;
     DeviceState *eth;
@@ -205,6 +206,8 @@ static void ESP32S2_soc_reset(DeviceState *dev)
         for (int i = 0; i < ESP32S2_TIMG_COUNT; ++i) {
             device_cold_reset(DEVICE(&s->timg[i]));
         }
+        device_cold_reset(DEVICE(&s->systimer));
+
         for (int i = 0; i < ESP32S2_SPI_COUNT; ++i) {
             device_cold_reset(DEVICE(&s->spi[i]));
         }
@@ -416,11 +419,14 @@ static void ESP32S2_soc_realize(DeviceState *dev, Error **errp)
     }
 
     for (int i = 0; i < ESP32S2_TIMG_COUNT; ++i) {
-        const hwaddr timg_base[] = {S2_DR_REG_TIMERGROUP0_BASE, S2_DR_REG_TIMERGROUP1_BASE};
+        const hwaddr timg_base[] = {S2_DR_REG_TIMERGROUP0_BASE, S2_DR_REG_TIMERGROUP1_BASE,};
         object_property_set_bool(OBJECT(&s->timg[i]), true, "realized", &error_abort);
 
         ESP32S2_soc_add_periph_device(sys_mem, &s->timg[i], timg_base[i]);
     }
+    object_property_set_bool(OBJECT(&s->systimer), true, "realized", &error_abort);
+    ESP32S2_soc_add_periph_device(sys_mem, &s->systimer, S2_DR_REG_SYSTIMER_BASE);
+
 
     for (int i = 0; i < ESP32S2_SPI_COUNT; ++i) {
         const hwaddr spi_base[] = {
@@ -517,14 +523,14 @@ static void esp32s2_soc_init(Object *obj)
     for (int i = 0; i < ESP32S2_UART_COUNT; ++i) {
         snprintf(name, sizeof(name), "uart%d", i);
         object_initialize_child(obj, name, &s->uart[i], sizeof(s->uart[i]),
-                                TYPE_ESP32_UART, &error_abort, NULL);
+                                TYPE_ESP32S2_UART, &error_abort, NULL);
     }
 
     object_property_add_alias(obj, "serial0", OBJECT(&s->uart[0]), "chardev",
                               &error_abort);
 
     object_initialize_child(obj, "gpio", &s->gpio, sizeof(s->gpio),
-                                TYPE_ESP32_GPIO, &error_abort, NULL);
+                                TYPE_ESP32S2_GPIO, &error_abort, NULL);
 
     object_initialize_child(obj, "dport", &s->dport, sizeof(s->dport),
                             TYPE_ESP32S2_DPORT, &error_abort, NULL);
@@ -549,6 +555,9 @@ static void esp32s2_soc_init(Object *obj)
         object_initialize_child(obj, name, &s->timg[i], sizeof(s->timg[i]),
                                 TYPE_ESP32_TIMG, &error_abort, NULL);
     }
+    object_initialize_child(obj, "systimer", &s->systimer, sizeof(s->systimer),
+                            TYPE_ESP32_TIMG, &error_abort, NULL);
+
 
     for (int i = 0; i < ESP32S2_SPI_COUNT; ++i) {
         snprintf(name, sizeof(name), "spi%d", i);
@@ -690,6 +699,13 @@ static uint64_t ESP32S2_unimp_read(void *opaque, hwaddr addr, unsigned int size)
 
     uint64_t r = 0;
     switch (addr) {
+                // 0x618000000 
+    case 0x00:
+        // Cache invaligate dcache items
+       r=0x200;
+       break;
+
+
     case 0x40:
        r=0x80000;
        break;
@@ -829,12 +845,29 @@ static void ESP32S2_unimp_write(void *opaque, hwaddr addr,
     Esp32UnimpState *s = ESP32S2_UNIMP(opaque);
     //printf("unimp write  %08X,%08X\n",(unsigned int)addr,(unsigned int)value);
     //if (value!=0x4000) printf("unimp write  %08X,%08X\n",(unsigned int)addr,(unsigned int)value);
+    uint32_t tmp_flash_cache[ESP32S2_CACHE_PAGE_SIZE*4];
+
 
     switch (addr) {
         // 0x61801200
+        case 0x1000 ... 0x11ff: {
+            // FLASH_MMU_TABLE
+            if ((value & 0x8000) == 0x8000) {
+                uint32_t esp_addr = 0x40000000 + ((addr-0x1000)/4) * ESP32S2_CACHE_PAGE_SIZE;
+                uint32_t flash_addr =(value & 0x3FFF) << 16;
+                printf("LOW unimp write  %08X,%08X,,%08X\n",(unsigned int)addr,(unsigned int)value,esp_addr);
+
+
+                blk_pread(s->flash_blk, flash_addr, /*cache_page*/tmp_flash_cache, 4*ESP32S2_CACHE_PAGE_SIZE);
+                printf("%08X,%08X,b %08X,p %08X\n",*(uint32_t *)tmp_flash_cache,*(uint32_t *)&tmp_flash_cache[4],*(uint32_t *)&tmp_flash_cache[0x1000],*(uint32_t *)&tmp_flash_cache[0x8000]);
+                cpu_physical_memory_write(esp_addr, tmp_flash_cache, ESP32S2_CACHE_PAGE_SIZE );                
+            }
+        } 
+        break;
+ 
+
         case 0x1200 ... 0x1400: 
         {
-            uint32_t tmp_flash_cache[ESP32S2_CACHE_PAGE_SIZE];
             s->mmu_table[addr-0x1200]=value;
             // /sizeof(uint32_t)
             //uint32_t mmu_entry = value;
@@ -845,23 +878,24 @@ static void ESP32S2_unimp_write(void *opaque, hwaddr addr,
             uint32_t phys_addr = 0x3f000000 + ((addr-0x1200)/4) * ESP32S2_CACHE_PAGE_SIZE;
             uint32_t flash_addr =(value & 0x3FFF) << 16;
             //uint32_t* cache_page = (uint32_t*) (cache_data + i * ESP32S2_CACHE_PAGE_SIZE);
-
+#if 0
             if ((s->mmu_table[addr-0x1200]!=0x4000) && value==0x4000) {
                 for(int reset=0;reset<ESP32S2_CACHE_PAGE_SIZE;reset++) {
                     tmp_flash_cache[reset]=0xbaadbaad ;
                 }
                 cpu_physical_memory_write(phys_addr, (char *)tmp_flash_cache, ESP32S2_CACHE_PAGE_SIZE );
             }
-
+#endif
 
             if ((value & 0x8000) == 0x8000) {
-                printf("unimp write  %08X,%08X\n",(unsigned int)addr,(unsigned int)value);
+                printf("unimp write  %08X,%08X,%08X\n",(unsigned int)addr,(unsigned int)value,phys_addr);
                 printf("MMU Map flash %08X to %08X\n",flash_addr,phys_addr);
-                blk_pread(s->flash_blk, flash_addr, /*cache_page*/tmp_flash_cache, ESP32S2_CACHE_PAGE_SIZE);
+                blk_pread(s->flash_blk, flash_addr, /*cache_page*/tmp_flash_cache, 4*ESP32S2_CACHE_PAGE_SIZE);
                 printf("%08X,%08X,b %08X,p %08X\n",*(uint32_t *)tmp_flash_cache,*(uint32_t *)&tmp_flash_cache[4],*(uint32_t *)&tmp_flash_cache[0x1000],*(uint32_t *)&tmp_flash_cache[0x8000]);
                 cpu_physical_memory_write(phys_addr, tmp_flash_cache, ESP32S2_CACHE_PAGE_SIZE );
             }
         }
+        break;
     }
 
 }

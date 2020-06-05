@@ -36,3 +36,4 @@ obj-$(CONFIG_PSERIES) += spapr_vty.o
 obj-$(CONFIG_TERMINAL3270) += terminal3270.o
 
 obj-$(CONFIG_ESP32) += esp32_uart.o
+obj-$(CONFIG_ESP32) += esp32s2_uart.o

@@ -28,13 +28,13 @@
  * we call "qcrypto_hash_bytes" to get the digest.
  */
 #if 1
-static void ESP32S2_sha_text_reg_byteswap_to(Esp32ShaState* s, uint32_t* dst, size_t len_words)
+static void ESP32S2_sha_text_reg_byteswap_to(Esp32S2ShaState* s, uint32_t* dst, size_t len_words)
 {
     for (int i = 0; i < len_words; ++i) {
         dst[i] = __builtin_bswap32(s->text[i]);
     }
 }
-static void ESP32S2_sha_text_reg_byteswap_result(Esp32ShaState* s, uint32_t* dst, size_t len_words)
+static void ESP32S2_sha_text_reg_byteswap_result(Esp32S2ShaState* s, uint32_t* dst, size_t len_words)
 {
     for (int i = 0; i < len_words; ++i) {
         dst[i] = __builtin_bswap32(s->hash[i]);
@@ -103,7 +103,7 @@ static QCryptoHashAlgorithm index_to_alg(uint32_t ix) {
 
 
 
-static void ESP32S2_sha_update_text(Esp32ShaState* s, QCryptoHashAlgorithm hash_alg)
+static void ESP32S2_sha_update_text(Esp32S2ShaState* s, QCryptoHashAlgorithm hash_alg)
 {
     uint32_t block_len_bytes = hash_block_bytes[hash_alg];
     //error_report("block_len:%d",block_len_bytes/4);
@@ -117,7 +117,7 @@ static void ESP32S2_sha_update_text(Esp32ShaState* s, QCryptoHashAlgorithm hash_
     s->full_text_len += block_len_bytes;
 }
 
-static void ESP32S2_sha_finish(Esp32ShaState *s, QCryptoHashAlgorithm hash_alg)
+static void ESP32S2_sha_finish(Esp32S2ShaState *s, QCryptoHashAlgorithm hash_alg)
 {
     /* ESP32 SHA accelerator accepts padded blocks (doesn't do any extra padding), but
      * qcrypto_hash_bytes adds padding after the last block. Remove the padding by checking
@@ -152,7 +152,7 @@ static void ESP32S2_sha_finish(Esp32ShaState *s, QCryptoHashAlgorithm hash_alg)
 
 static uint64_t ESP32S2_sha_read(void *opaque, hwaddr addr, unsigned int size)
 {
-    Esp32ShaState *s = ESP32S2_SHA(opaque);
+    Esp32S2ShaState *s = ESP32S2_SHA(opaque);
     uint64_t r = 0;
     switch (addr) {
         case 0:
@@ -166,7 +166,8 @@ static uint64_t ESP32S2_sha_read(void *opaque, hwaddr addr, unsigned int size)
                 if (addr==0x0040)  {
                     ESP32S2_sha_finish(s, index_to_alg(s->mode));                             
                 }  
-                r=0; // Patch with 0 until calculations works... s->hash[(addr-0x40)/ sizeof(uint32_t)];
+                r=0; // Patch with 0 until calculations works... 
+                //r=s->hash[(addr-0x40)/ sizeof(uint32_t)];
             }
         break;
         case 0x0080 ... 0x00FC:
@@ -190,7 +191,7 @@ static uint64_t ESP32S2_sha_read(void *opaque, hwaddr addr, unsigned int size)
 static void ESP32S2_sha_write(void *opaque, hwaddr addr,
                        uint64_t value, unsigned int size)
 {
-    Esp32ShaState *s = ESP32S2_SHA(opaque);
+    Esp32S2ShaState *s = ESP32S2_SHA(opaque);
     switch (addr) {
         case 0:
             s->mode=(value &0xf);
@@ -256,7 +257,7 @@ static const MemoryRegionOps ESP32S2_sha_ops = {
 
 static void ESP32S2_sha_reset(DeviceState *dev)
 {
-    Esp32ShaState *s = ESP32S2_SHA(dev);
+    Esp32S2ShaState *s = ESP32S2_SHA(dev);
     g_free(s->full_text);
     s->full_text = NULL;
     s->full_text_len = 0;
@@ -266,7 +267,7 @@ static void ESP32S2_sha_reset(DeviceState *dev)
 
 static void ESP32S2_sha_init(Object *obj)
 {
-    Esp32ShaState *s = ESP32S2_SHA(obj);
+    Esp32S2ShaState *s = ESP32S2_SHA(obj);
     SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
 
     memory_region_init_io(&s->iomem, obj, &ESP32S2_sha_ops, s,
@@ -284,7 +285,7 @@ static void ESP32S2_sha_class_init(ObjectClass *klass, void *data)
 static const TypeInfo ESP32S2_sha_info = {
     .name = TYPE_ESP32S2_SHA,
     .parent = TYPE_SYS_BUS_DEVICE,
-    .instance_size = sizeof(Esp32ShaState),
+    .instance_size = sizeof(Esp32S2ShaState),
     .instance_init = ESP32S2_sha_init,
     .class_init = ESP32S2_sha_class_init
 };

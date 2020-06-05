@@ -6,13 +6,13 @@
 #include "hw/misc/esp32s2_reg.h"
 
 #define TYPE_ESP32S2_SHA "misc.esp32s2.sha"
-#define ESP32S2_SHA(obj) OBJECT_CHECK(Esp32ShaState, (obj), TYPE_ESP32S2_SHA)
+#define ESP32S2_SHA(obj) OBJECT_CHECK(Esp32S2ShaState, (obj), TYPE_ESP32S2_SHA)
 
 #define ESP32S2_SHA_HASH_REG_CNT    16
 #define ESP32S2_SHA_TEXT_REG_CNT    32
 
 
-typedef struct Esp32ShaState {
+typedef struct Esp32S2ShaState {
     SysBusDevice parent_obj;
     MemoryRegion iomem;
     uint32_t hash[ESP32S2_SHA_HASH_REG_CNT];
@@ -22,7 +22,7 @@ typedef struct Esp32ShaState {
     uint8_t* full_text;
     uint32_t full_text_reserved;
     uint32_t full_text_len;
-} Esp32ShaState;
+} Esp32S2ShaState;
 
 #define SHA_REG_GROUP(name, base) \
     REG32(name ## _START, (base)) \
