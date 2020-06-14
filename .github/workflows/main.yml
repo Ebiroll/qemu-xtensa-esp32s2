@@ -1,0 +1,23 @@
+name: CI build
+
+on: [push]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+        
+    steps:
+    - uses: actions/checkout@v2
+    - name: Install dependencies
+      run: |
+        sudo apt-get install build-essential libpixman-1-0 libpixman-1-dev libglib2.0-dev zlib1g-dev
+    - name: Compile qemu
+      run: |
+        mkdir qemu_esp32s2
+        cd qemu_esp32s2
+        $GITHUB_WORKSPACE/configure --disable-werror --prefix=./root --enable-debug --enable-sanitizers  --disable-capstone   --disable-strip --target-list=xtensa-softmmu,riscv32-softmmu 
+        make -j 2
+    - uses: actions/upload-artifact@master
+      with:
+        name: qemu-system-xtensa
+        path: ./qemu_esp32s2/xtensa-softmmu/qemu-system-xtensa
