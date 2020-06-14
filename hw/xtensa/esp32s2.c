@@ -589,8 +589,14 @@ static void esp32s2_soc_init(Object *obj)
         error_report("unable to load ROM image '%s'\n", irom_filename);
         exit(EXIT_FAILURE);
     }
-
-
+/* 0x3ffa0000 and 0x40010000 maps to same data, Data and Instrucions
+    if (!irom_filename ||
+        load_image_targphys(irom_filename, 0x40010000, 64*1024) < 0) { 
+        error_report("unable to load ROM image '%s'\n", irom_filename);
+        exit(EXIT_FAILURE);
+    }
+*/
+    
     rom_filename = qemu_find_file(QEMU_FILE_TYPE_BIOS, rom_filename);
     if (!rom_filename ||
         load_image_targphys(rom_filename, 0x40000000, 128*1024) < 0) { 
@@ -794,12 +800,10 @@ uint Cache_Ibus_MMU_Set(uint ext_ram,uint vaddr,uint paddr,uint psize,uint num,i
       }
       if (vaddr + 0xc1000000 < 0x400000) {
         uVar2 = (vaddr >> 0x10 & 0x3f) + 0x80;
-      }
-      else {
+      } else {
         if (vaddr + 0xc0000000 < 0x400000) {
           uVar2 = vaddr >> 0x10 & 0x3f;
-        }
-        else {
+        } else {
           if (0x3fffff < vaddr + 0xbfc00000) {
               return 4;  // vaddr is out of range
           }
@@ -834,6 +838,107 @@ read RTC_CNTL_RESET_STATE_REG
 unimp write  000012FC,00008001
 
 
+
+
+int Cache_Dbus_MMU_Set(uint32_t ext_ram,uint32_t vaddr,uint32_t paddr,uint32_t psize_64,
+                      uint32_t num_pages,uint32_t fixed)
+
+{
+  int iVar1;
+  int iVar2;
+  uint *puVar3;
+  uint uVar4;
+  uint uVar5;
+  uint uVar6;
+  
+                    /* 
+                         * @brief Set DCache mmu mapping.
+                         *        Please do not call this function in your SDK application.
+                         *
+                         * @param  uint32_t ext_ram : DPORT_MMU_ACCESS_FLASH for flash,
+                       DPORT_MMU_ACCESS_SPIRAM for spiram, DPORT_MMU_INVALID for invalid.
+                         *
+                         * @param  uint32_t vaddr : virtual address in CPU address space.
+                         *                              Can be DRam0, DRam1, DRom0, DPort and AHB
+                       buses address.
+                         *                              Should be aligned by psize.
+                         *
+                         * @param  uint32_t paddr : physical address in external memory.
+                         *                              Should be aligned by psize.
+                         *
+                         * @param  uint32_t psize : page size of DCache, in kilobytes. Should be 64
+                       here.
+                         *
+                         * @param  uint32_t num : pages to be set.
+                       
+                         * @param  uint32_t fixed : 0 for physical pages grow with virtual pages,
+                       other for virtual pages map to same physical page.
+                         *
+                         * @return uint32_t: error status
+                         *                   0 : mmu set success
+                         *                   2 : vaddr or paddr is not aligned
+                         *                   3 : psize error
+                         *                   4 : vaddr is out of range
+                         */
+  iVar1 = 2;
+  if (((0xffff >> ((char)(0x40 / psize_64) - 1U & 0x1f) & (vaddr | paddr)) == 0) &&
+     (iVar1 = 3, psize_64 == 0x40)) {
+    do {
+      if (num_pages == 0) {
+        return 0;
+      }
+      uVar5 = vaddr + 0x400000 & 0xffc00000;
+      iVar1 = uVar5 - vaddr;  // 0x400000 
+      uVar6 = iVar1 >> 0x10;   // 1
+      if (num_pages <= uVar6) {
+        uVar6 = num_pages;
+      }
+      if (vaddr + 0xc0400000 < 0x400000) {
+        iVar2 = (vaddr >> 0x10 & 0x3f) + 0xc0;
+      } else {
+        if (vaddr + 0xc0800000 < 0x400000) {
+          iVar2 = (vaddr >> 0x10 & 0x3f) + 0x100;
+        } else {
+          if (0x3fffff < vaddr + 0xc0c00000) {
+            return 4;
+          }
+          iVar2 = (vaddr >> 0x10 & 0x3f) + 0x140;
+        }
+      }
+      puVar3 = (uint *)(&DAT_ram_61801000 + iVar2 * 4);
+      uVar4 = 0;
+      while (uVar4 != uVar6) {
+        if (fixed == 0) {
+          *puVar3 = uVar4 + (paddr >> 0x10) | ext_ram;
+        }
+        else {
+          *puVar3 = paddr >> 0x10 | ext_ram;
+        }
+        uVar4 = uVar4 + 1;
+        puVar3 = puVar3 + 1;
+      }
+      num_pages = num_pages - uVar4;
+      vaddr = uVar5;
+      if (fixed == 0) {
+        paddr = paddr + iVar1;
+      }
+    } while( true );
+  }
+  return iVar1;
+}
+
+void Cache_MMU_Init(void)
+
+{
+  undefined4 *puVar1;
+  
+  puVar1 = (undefined4 *)&DAT_ram_61801000;
+  do {
+    *puVar1 = 0x4000;
+    puVar1 = puVar1 + 1;
+  } while (puVar1 != (undefined4 *)0x61801600);
+  return;
+}
 #endif
 
 
@@ -846,27 +951,64 @@ static void ESP32S2_unimp_write(void *opaque, hwaddr addr,
     //printf("unimp write  %08X,%08X\n",(unsigned int)addr,(unsigned int)value);
     //if (value!=0x4000) printf("unimp write  %08X,%08X\n",(unsigned int)addr,(unsigned int)value);
     uint32_t tmp_flash_cache[ESP32S2_CACHE_PAGE_SIZE*4];
-
+    if ((value & 0x8000) == 0x8000) {
+            printf("** Unimp write  %08X,%08X\n",(unsigned int)addr,(unsigned int)value);
+    }
 
     switch (addr) {
         // 0x61801200
-        case 0x1000 ... 0x11ff: {
+        case 0x1000 ... 0x1100: {
             // FLASH_MMU_TABLE
             if ((value & 0x8000) == 0x8000) {
-                uint32_t esp_addr = 0x40000000 + ((addr-0x1000)/4) * ESP32S2_CACHE_PAGE_SIZE;
+                uint32_t esp_addr = 0x40080000 + ((addr-0x1020)/4) * ESP32S2_CACHE_PAGE_SIZE;
                 uint32_t flash_addr =(value & 0x3FFF) << 16;
-                printf("LOW unimp write  %08X,%08X,,%08X\n",(unsigned int)addr,(unsigned int)value,esp_addr);
+                printf("i write  %08X,%08X,%08X\n",(unsigned int)addr,(unsigned int)value,esp_addr);
 
 
-                blk_pread(s->flash_blk, flash_addr, /*cache_page*/tmp_flash_cache, 4*ESP32S2_CACHE_PAGE_SIZE);
+                blk_pread(s->flash_blk, flash_addr, /*cache_page*/tmp_flash_cache, ESP32S2_CACHE_PAGE_SIZE);
                 printf("%08X,%08X,b %08X,p %08X\n",*(uint32_t *)tmp_flash_cache,*(uint32_t *)&tmp_flash_cache[4],*(uint32_t *)&tmp_flash_cache[0x1000],*(uint32_t *)&tmp_flash_cache[0x8000]);
                 cpu_physical_memory_write(esp_addr, tmp_flash_cache, ESP32S2_CACHE_PAGE_SIZE );                
             }
         } 
         break;
- 
+ /*
+    Page 26 in TRM
 
-        case 0x1200 ... 0x1400: 
+1. System and Memory1.3.2.5RTC FAST MemoryRTC FAST Memory is an 8-KB, read-and-write SRAM, addressed by the CPU on the data or instruction bus, inthe same order, via range(s) described in Table2.1.3.2.6RTC SLOW MemoryRTC SLOW Memory is an 8-KB, read-and-write SRAM, addressed by the CPU via range(s) shared by the databus and the instruction bus, as described in Table2.RTC SLOW Memory can also be used as a peripheral addressable to the CPU via either 0x3F42_1000~0x3F42_2FFF or 0x6002_1000~0x6002_2FFF on the data bus.1.3.3External MemoryESP32-S2 supports multiple QSPI/OSPI flash and RAM chips. It also supports hardware encryption/decryptionbased on XTS-AES to protect user programs and data in the flash and external RAM.1.3.3.1External Memory Address MappingThe CPU accesses the external flash and RAM via the cache. According to the MMU settings, the cache mapsthe CPU’s address to the external physical memory address. Due to this address mapping, the ESP32-S2 canaddress up to 1 GB external flash and 1 GB external RAM.Using the cache, ESP32-S2 can support the following address space mappings at the same time.•Up to 7.5 MB instruction bus address space can be mapped into the external flash or RAM as individual 64KB blocks, via the instruction cache (ICache). Byte (8-bit), half-word (16-bit) and word (32-bit) reads aresupported.•Up to 4 MB read-only data bus address space can be mapped into the external flash or RAM as individual64 KB blocks, via ICache. Byte (8-bit), half-word (16-bit) and word (32-bit) reads are supported.•Up to 10.5 MB data bus address space can be mapped into the external RAM as individual 64 KB blocks,via DCache. Byte (8-bit), half-word (16-bit) or word (32-bit) reads and writes are supported. Blocks fromthis 10.5 MB space can also be mapped into the external flash or RAM, for read operations only.Table3lists the mapping between the cache and the corresponding address ranges on the data bus andinstruction bus.Table 3: External Memory Address MappingBoundary AddressBus TypeLow AddressHigh AddressSizeTargetPermission ControlData bus0x3F00_00000x3F3F_FFFF4 MBICacheYESData bus0x3F50_00000x3FF7_FFFF10.5 MBDCacheYESInstruction bus0x4008_00000x407F_FFFF7.5 MBICacheYES
+
+*/
+// int e = Cache_Ibus_MMU_Set(MMU_ACCESS_FLASH, MMU_BLOCK63_VADDR, map_at, 64, 1, 0);
+/*
+        case 0x12fc:
+        // 3F3F0000
+        {                        // 0x3f3f1000
+                uint32_t esp_addr = 3F3F0000; // 0x3ffb2000 +  ((addr-0x1200)/4) * ESP32S2_CACHE_PAGE_SIZE;
+                uint32_t flash_addr =(value & 0x3FFF) << 16;
+                printf("12fc unimp write  %08X,%08X,%08X\n",(unsigned int)addr,(unsigned int)value,esp_addr);
+                blk_pread(s->flash_blk, flash_addr, tmp_flash_cache, 4*ESP32S2_CACHE_PAGE_SIZE);
+                printf("%08X,%08X,b %08X,p %08X\n",*(uint32_t *)tmp_flash_cache,*(uint32_t *)&tmp_flash_cache[4],*(uint32_t *)&tmp_flash_cache[0x1000],*(uint32_t *)&tmp_flash_cache[0x8000]);
+                cpu_physical_memory_write(esp_addr, tmp_flash_cache, ESP32S2_CACHE_PAGE_SIZE );                
+
+        }
+        break;
+*/
+
+        case 0x1200 ... 0x12fc:
+        {
+            uint32_t phys_addr = 0x3f000000 + ((addr-0x1200)/4) * ESP32S2_CACHE_PAGE_SIZE;
+            uint32_t flash_addr =(value & 0x3FFF) << 16;
+            if ((value & 0x8000) == 0x8000) {
+                printf("d write  %08X,%08X,%08X\n",(unsigned int)addr,(unsigned int)value,phys_addr);
+                printf("MMU Map flash %08X to %08X\n",flash_addr,phys_addr);
+                blk_pread(s->flash_blk, flash_addr, /*cache_page*/tmp_flash_cache, ESP32S2_CACHE_PAGE_SIZE);
+                printf("%08X,%08X,b %08X,p %08X\n",*(uint32_t *)tmp_flash_cache,*(uint32_t *)&tmp_flash_cache[4],*(uint32_t *)&tmp_flash_cache[0x1000],*(uint32_t *)&tmp_flash_cache[0x8000]);
+                cpu_physical_memory_write(phys_addr, tmp_flash_cache, ESP32S2_CACHE_PAGE_SIZE );
+            }
+        }
+        break;
+
+
+        case 0x1300 ... 0x1400: 
         {
             s->mmu_table[addr-0x1200]=value;
             // /sizeof(uint32_t)
@@ -875,7 +1017,7 @@ static void ESP32S2_unimp_write(void *opaque, hwaddr addr,
             // 0x3f008000
 
            // (const esp_partition_info_t *) 0x3f008000
-            uint32_t phys_addr = 0x3f000000 + ((addr-0x1200)/4) * ESP32S2_CACHE_PAGE_SIZE;
+            uint32_t phys_addr = 0x3ffb2000 + ((addr-0x1200)/4) * ESP32S2_CACHE_PAGE_SIZE;
             uint32_t flash_addr =(value & 0x3FFF) << 16;
             //uint32_t* cache_page = (uint32_t*) (cache_data + i * ESP32S2_CACHE_PAGE_SIZE);
 #if 0
@@ -890,7 +1032,7 @@ static void ESP32S2_unimp_write(void *opaque, hwaddr addr,
             if ((value & 0x8000) == 0x8000) {
                 printf("unimp write  %08X,%08X,%08X\n",(unsigned int)addr,(unsigned int)value,phys_addr);
                 printf("MMU Map flash %08X to %08X\n",flash_addr,phys_addr);
-                blk_pread(s->flash_blk, flash_addr, /*cache_page*/tmp_flash_cache, 4*ESP32S2_CACHE_PAGE_SIZE);
+                blk_pread(s->flash_blk, flash_addr, /*cache_page*/tmp_flash_cache, ESP32S2_CACHE_PAGE_SIZE);
                 printf("%08X,%08X,b %08X,p %08X\n",*(uint32_t *)tmp_flash_cache,*(uint32_t *)&tmp_flash_cache[4],*(uint32_t *)&tmp_flash_cache[0x1000],*(uint32_t *)&tmp_flash_cache[0x8000]);
                 cpu_physical_memory_write(phys_addr, tmp_flash_cache, ESP32S2_CACHE_PAGE_SIZE );
             }
