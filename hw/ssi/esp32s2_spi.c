@@ -18,7 +18,7 @@
 #include "hw/irq.h"
 #include "hw/qdev-properties.h"
 #include "hw/ssi/ssi.h"
-#include "hw/ssi/esp32_spi.h"
+#include "hw/ssi/esp32s2_spi.h"
 
 
 
@@ -36,7 +36,16 @@ enum {
     CMD_WREN = 0x6,
     CMD_READ = 0x03,
 };
+/*
+ if (command==0x1f) { // RDID
+          s->reg[data_w0]=0x409D;  
+          // Size ??
+          s->reg[data_w1]=0x3E80;
+          s->reg[data_w2]=0x00;
+          s->reg[data_w3]=0x00;
 
+       }
+*/
 
 #define ESP32_SPI_REG_SIZE    0x1000
 
@@ -44,7 +53,7 @@ static void esp32_spi_do_command(Esp32SpiState* state, uint32_t cmd_reg);
 
 static uint64_t esp32_spi_read(void *opaque, hwaddr addr, unsigned int size)
 {
-    Esp32SpiState *s = ESP32_SPI(opaque);
+    Esp32SpiState *s = ESP32S2_SPI(opaque);
     uint64_t r = 0;
     switch (addr) {
     case A_SPI_ADDR:
@@ -96,7 +105,7 @@ static uint64_t esp32_spi_read(void *opaque, hwaddr addr, unsigned int size)
 static void esp32_spi_write(void *opaque, hwaddr addr,
                        uint64_t value, unsigned int size)
 {
-    Esp32SpiState *s = ESP32_SPI(opaque);
+    Esp32SpiState *s = ESP32S2_SPI(opaque);
     switch (addr) {
     case A_SPI_W0 ... A_SPI_W0 + (ESP32_SPI_BUF_WORDS - 1) * sizeof(uint32_t):
         s->data_reg[(addr - A_SPI_W0) / sizeof(uint32_t)] = value;
@@ -126,6 +135,15 @@ static void esp32_spi_write(void *opaque, hwaddr addr,
         s->user2_reg = value;
         break;
     case A_SPI_MOSI_DLEN:
+        {
+            if (value==0x17) {
+                printf("WTF\n");
+                s->data_reg[0]=0x16409D;
+                s->data_reg[1]=0x3E80;
+                s->data_reg[2]=0x3E80;
+                s->data_reg[3]=0x3E80;
+            }
+        }
         s->mosi_dlen_reg = value;
         break;
     case A_SPI_MISO_DLEN:
@@ -300,7 +318,7 @@ static const MemoryRegionOps esp32_spi_ops = {
 
 static void esp32_spi_reset(DeviceState *dev)
 {
-    Esp32SpiState *s = ESP32_SPI(dev);
+    Esp32SpiState *s = ESP32S2_SPI(dev);
     s->pin_reg = 0x6;
     s->user1_reg = FIELD_DP32(0, SPI_USER1, ADDR_BITLEN, 23);
     s->user1_reg = FIELD_DP32(s->user1_reg, SPI_USER1, DUMMY_CYCLELEN, 7);
@@ -313,11 +331,11 @@ static void esp32_spi_realize(DeviceState *dev, Error **errp)
 
 static void esp32_spi_init(Object *obj)
 {
-    Esp32SpiState *s = ESP32_SPI(obj);
+    Esp32SpiState *s = ESP32S2_SPI(obj);
     SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
 
     memory_region_init_io(&s->iomem, obj, &esp32_spi_ops, s,
-                          TYPE_ESP32_SPI, ESP32_SPI_REG_SIZE);
+                          TYPE_ESP32S2_SPI, ESP32_SPI_REG_SIZE);
     sysbus_init_mmio(sbd, &s->iomem);
     sysbus_init_irq(sbd, &s->irq);
 
@@ -339,7 +357,7 @@ static void esp32_spi_class_init(ObjectClass *klass, void *data)
 }
 
 static const TypeInfo esp32_spi_info = {
-    .name = TYPE_ESP32_SPI,
+    .name = TYPE_ESP32S2_SPI,
     .parent = TYPE_SYS_BUS_DEVICE,
     .instance_size = sizeof(Esp32SpiState),
     .instance_init = esp32_spi_init,

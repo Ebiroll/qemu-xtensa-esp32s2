@@ -38,3 +38,4 @@ common-obj-$(CONFIG_RASPI) += bcm2835_systmr.o
 
 obj-$(CONFIG_ESP32) += esp32_frc_timer.o
 obj-$(CONFIG_ESP32) += esp32_timg.o
+obj-$(CONFIG_ESP32) += esp32s2_systimer.o

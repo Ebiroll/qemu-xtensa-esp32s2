@@ -27,8 +27,9 @@
 #include "hw/misc/esp32s2_sha.h"
 #include "hw/timer/esp32_frc_timer.h"
 #include "hw/timer/esp32_timg.h"
-#include "hw/ssi/esp32_spi.h"
-#include "hw/nvram/esp32_efuse.h"
+#include "hw/timer/esp32s2_systimer.h"
+#include "hw/ssi/esp32s2_spi.h"
+#include "hw/nvram/esp32s2_efuse.h"
 #include "hw/xtensa/xtensa_memory.h"
 #include "hw/misc/unimp.h"
 #include "hw/irq.h"
@@ -142,10 +143,10 @@ typedef struct Esp32S2SocState {
     Esp32RtcCntlState rtc_cntl;
     Esp32FrcTimerState frc_timer[ESP32S2_FRC_COUNT];
     Esp32TimgState timg[ESP32S2_TIMG_COUNT];
-    Esp32TimgState systimer;
+    Esp32S2SysTimerState systimer;
     Esp32SpiState spi[ESP32S2_SPI_COUNT];
     Esp32S2ShaState sha;
-    Esp32EfuseState efuse;
+    Esp32S2EfuseState efuse;
     Esp32UnimpState myunimp;
     DeviceState *eth;
 
@@ -556,13 +557,13 @@ static void esp32s2_soc_init(Object *obj)
                                 TYPE_ESP32_TIMG, &error_abort, NULL);
     }
     object_initialize_child(obj, "systimer", &s->systimer, sizeof(s->systimer),
-                            TYPE_ESP32_TIMG, &error_abort, NULL);
+                            TYPE_ESP32S2_SYSTIMER, &error_abort, NULL);
 
 
     for (int i = 0; i < ESP32S2_SPI_COUNT; ++i) {
         snprintf(name, sizeof(name), "spi%d", i);
         object_initialize_child(obj, name, &s->spi[i], sizeof(s->spi[i]),
-                                TYPE_ESP32_SPI, &error_abort, NULL);
+                                TYPE_ESP32S2_SPI, &error_abort, NULL);
     }
 
     object_initialize_child(obj, "rng", &s->rng, sizeof(s->rng),
@@ -572,7 +573,7 @@ static void esp32s2_soc_init(Object *obj)
                                 TYPE_ESP32S2_SHA, &error_abort, NULL);
 
     object_initialize_child(obj, "efuse", &s->efuse, sizeof(s->efuse),
-                                    TYPE_ESP32_EFUSE, &error_abort, NULL);
+                                    TYPE_ESP32S2_EFUSE, &error_abort, NULL);
 
 
     qdev_init_gpio_in_named(DEVICE(s), ESP32S2_dig_reset, ESP32_RTC_DIG_RESET_GPIO, 1);

@@ -7,3 +7,4 @@ common-obj-$(CONFIG_MAC_NVRAM) += mac_nvram.o
 common-obj-$(CONFIG_NRF51_SOC) += nrf51_nvm.o
 obj-$(CONFIG_PSERIES) += spapr_nvram.o
 obj-$(CONFIG_ESP32) += esp32_efuse.o
+obj-$(CONFIG_ESP32) += esp32s2_efuse.o

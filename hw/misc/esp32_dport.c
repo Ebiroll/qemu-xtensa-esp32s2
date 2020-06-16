@@ -197,9 +197,17 @@ static void esp32_dport_write(void *opaque, hwaddr addr,
         s->cache_state[1].iram0.illegal_access_trap_en = (FIELD_EX32(value, DPORT_CACHE_IA_INT_EN, IA_INT_APP_IRAM0));
         break;
     case PRO_DROM0_MMU_FIRST ... PRO_DROM0_MMU_LAST:
+        if (value!=0x100 && value!=0x0) {
+            uint32_t phys_addr = 0x3f400000 + ((addr-PRO_DROM0_MMU_FIRST)/4) * 1024;
+            printf("d write  %08X,%08X,%08X\n",(unsigned int)addr,(unsigned int)value,phys_addr); 
+        }
         set_mmu_entry(&s->cache_state[0].drom0, PRO_DROM0_MMU_FIRST, addr, value);
         break;
     case PRO_IRAM0_MMU_FIRST ... PRO_IRAM0_MMU_LAST:
+        if (value!=0x100 && value!=0x0) {
+            uint32_t phys_addr = 0x400d0000 + ((addr-PRO_DROM0_MMU_FIRST)/4) * 1024;
+            printf("i write  %08X,%08X,%08X\n",(unsigned int)addr,(unsigned int)value,phys_addr); 
+        }
         set_mmu_entry(&s->cache_state[0].iram0, PRO_IRAM0_MMU_FIRST, addr, value);
         break;
     case APP_DROM0_MMU_FIRST ... APP_DROM0_MMU_LAST:
