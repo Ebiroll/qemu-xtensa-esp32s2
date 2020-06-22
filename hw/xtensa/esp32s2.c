@@ -952,6 +952,28 @@ void Cache_MMU_Init(void)
 }
 #endif
 
+//#define ICACHE_MMU_SIZE                 0x300
+//#define DCACHE_MMU_SIZE                 0x300
+// 0x180 descripttors => 0x600 
+
+
+//#define DR_REG_EXTMEM_BASE                      0x61800000
+
+
+// Icache, Databus 0x3f0_0000 - 0x3F3F_FFFF 4MB   63 descriptors (0x3F)
+// 0x3f*4 = FC
+
+// Icache MMU      0x4008_000 - 0x407F_FFFF  7.5M  119 descriptors (0x77)
+// 0x77*4 = 1DC
+//#define DR_REG_MMU_TABLE                        0x61801000
+
+// Dcache          0x3F50_0000 - 0x3FF7_FFFF  10.5MB 167 descriptors (0xa7) 
+// 0xa7*4 = 29C
+
+//#define DR_REG_ITAG_TABLE                       0x61802000
+//#define DR_REG_DTAG_TABLE                       0x61803000
+
+
 
 
 
@@ -967,7 +989,7 @@ static void ESP32S2_unimp_write(void *opaque, hwaddr addr,
     }
 
     switch (addr) {
-        // 0x61801200
+        // 0x61801000
         case 0x1000 ... 0x1100: {
             // FLASH_MMU_TABLE
             if ((value & 0x8000) == 0x8000) {
