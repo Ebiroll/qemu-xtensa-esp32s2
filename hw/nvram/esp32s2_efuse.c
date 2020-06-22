@@ -91,7 +91,7 @@ static uint64_t esp32s2_efuse_read(void *opaque, hwaddr addr, unsigned int size)
         r = 0x16042600;
     }
 
-    printf("efuse read  %08X,%08X\n",(unsigned int)addr,(unsigned int)r);
+    //printf("efuse read  %08X,%08X\n",(unsigned int)addr,(unsigned int)r);
 
     return r;
 }
@@ -140,7 +140,7 @@ static void esp32s2_efuse_write(void *opaque, hwaddr addr,
 //        break;
     }
 
-       printf("efuse write  %08X,%08X\n",(unsigned int)addr,(unsigned int)value);
+      // printf("efuse write  %08X,%08X\n",(unsigned int)addr,(unsigned int)value);
 }
 
 #define APPLY_DIS(rdwr_, ctrl_field_, dest_field_) \

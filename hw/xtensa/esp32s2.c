@@ -712,7 +712,7 @@ static void ESP32S2_machine_init_openeth(Esp32S2SocState *ss)
 static uint64_t ESP32S2_unimp_read(void *opaque, hwaddr addr, unsigned int size)
 {
     Esp32UnimpState *s = ESP32S2_UNIMP(opaque);
-    printf("unimp read  %08X\n",(unsigned int)addr);
+    //printf("unimp read  %08X\n",(unsigned int)addr);
 
     uint64_t r = 0;
     switch (addr) {
@@ -997,7 +997,7 @@ static void ESP32S2_unimp_write(void *opaque, hwaddr addr,
                        uint64_t value, unsigned int size)
 {
     Esp32UnimpState *s = ESP32S2_UNIMP(opaque);
-    printf("unimp write  %08X,%08X\n",(unsigned int)addr,(unsigned int)value);
+    //printf("unimp write  %08X,%08X\n",(unsigned int)addr,(unsigned int)value);
     //if (value!=0x4000) printf("unimp write  %08X,%08X\n",(unsigned int)addr,(unsigned int)value);
 
 
