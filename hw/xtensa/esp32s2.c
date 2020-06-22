@@ -77,8 +77,10 @@ enum {
 #define SOC_DROM_HIGH   0x3FF80000 
 #define SOC_IROM_LOW    0x40080000
 #define SOC_IROM_HIGH   0x40800000
+
 #define SOC_IROM_MASK_LOW  0x40000000
 #define SOC_IROM_MASK_HIGH 0x4001A100
+
 #define SOC_IRAM_LOW    0x40020000
 #define SOC_IRAM_HIGH   0x40070000
 #define SOC_DRAM_LOW    0x3FFB0000
@@ -93,6 +95,10 @@ enum {
 #define SOC_EXTRAM_DATA_HIGH 0x3FF80000
 
 
+
+
+
+
 static const struct MemmapEntry {
     hwaddr base;
     hwaddr size;
@@ -100,10 +106,10 @@ static const struct MemmapEntry {
     [ESP32S2_MEMREGION_DROM] = { SOC_DROM_LOW, SOC_DROM_HIGH-SOC_DROM_LOW},
     [ESP32S2_MEMREGION_IROM] = { 0x40000000, 0x80000 },
     [ESP32S2_MEMREGION_IROM1] = { 0x3ffa0000, 0x10000 },
-    [ESP32S2_MEMREGION_DRAM] = { SOC_DRAM_LOW, SOC_DRAM_HIGH-SOC_DRAM_LOW},
-    [ESP32S2_MEMREGION_IRAM] = { SOC_IRAM_LOW, SOC_IRAM_HIGH-SOC_IRAM_LOW },
-    [ESP32S2_MEMREGION_ICACHE0] = { SOC_DROM_LOW ,SOC_DROM_HIGH-SOC_DROM_LOW },
-    [ESP32S2_MEMREGION_ICACHE1] = { SOC_IRAM_LOW ,SOC_IRAM_HIGH-SOC_IRAM_LOW },
+    [ESP32S2_MEMREGION_DRAM] = {  0x3FFB0000 /*SOC_DRAM_LOW  */, 0x50000 /* 32K + 288KB */},
+    [ESP32S2_MEMREGION_IRAM] = {  0x40020000 /* SOC_IRAM_LOW */,0x50000 /* 32K + 288KB */},
+    [ESP32S2_MEMREGION_ICACHE0] = { SOC_DROM_LOW ,0xF80000 },  // 4MB, 0x8000 on esp32, emulation where cache is handled correctly
+    [ESP32S2_MEMREGION_ICACHE1] = { SOC_IROM_LOW ,0xF80000 },  // 4MB, 0x8000 on esp32, emulation where cache is handled correctly
     [ESP32S2_MEMREGION_RTCSLOW] = { SOC_RTC_DATA_LOW, SOC_RTC_DATA_HIGH-SOC_RTC_DATA_LOW },
     [ESP32S2_MEMREGION_RTCFAST_I] = {SOC_RTC_IRAM_LOW, SOC_RTC_IRAM_HIGH-SOC_RTC_IRAM_LOW},
     [ESP32S2_MEMREGION_RTCFAST_D] = { SOC_RTC_DRAM_LOW, SOC_RTC_DRAM_HIGH-SOC_RTC_DRAM_LOW},
@@ -303,8 +309,9 @@ static void ESP32S2_soc_realize(DeviceState *dev, Error **errp)
 
     MemoryRegion *dram = g_new(MemoryRegion, 1);
     MemoryRegion *iram = g_new(MemoryRegion, 1);
-    MemoryRegion *drom = g_new(MemoryRegion, 1);
+    //MemoryRegion *drom = g_new(MemoryRegion, 1);
     MemoryRegion *irom = g_new(MemoryRegion, 1);
+    // irom1 is acually data rom...
     MemoryRegion *irom1 = g_new(MemoryRegion, 1);
 
     MemoryRegion *icache0 = g_new(MemoryRegion, 1);
@@ -322,17 +329,19 @@ static void ESP32S2_soc_realize(DeviceState *dev, Error **errp)
     memory_region_add_subregion(sys_mem, memmap[ESP32S2_MEMREGION_IROM1].base, irom1);
 
 
-
-    memory_region_init_alias(drom, NULL, "esp32.drom", irom, 0x60000, memmap[ESP32S2_MEMREGION_DROM].size);
-    memory_region_add_subregion(sys_mem, memmap[ESP32S2_MEMREGION_DROM].base, drom);
+    //memory_region_init_alias(drom, NULL, "esp32.drom", irom, 0x60000, memmap[ESP32S2_MEMREGION_DROM].size);
+    //memory_region_add_subregion(sys_mem, memmap[ESP32S2_MEMREGION_DROM].base, drom);
 
     memory_region_init_ram(dram, NULL, "esp32.dram",
                            memmap[ESP32S2_MEMREGION_DRAM].size, &error_fatal);
     memory_region_add_subregion(sys_mem, memmap[ESP32S2_MEMREGION_DRAM].base, dram);
 
-    memory_region_init_ram(iram, NULL, "esp32.iram",
-                           memmap[ESP32S2_MEMREGION_IRAM].size, &error_fatal);
+    memory_region_init_alias(iram, NULL, "esp32.iram", dram, 0x0, memmap[ESP32S2_MEMREGION_DRAM].size);
     memory_region_add_subregion(sys_mem, memmap[ESP32S2_MEMREGION_IRAM].base, iram);
+
+    //memory_region_init_ram(iram, NULL, "esp32.iram",
+    //                       memmap[ESP32S2_MEMREGION_IRAM].size, &error_fatal);
+    //memory_region_add_subregion(sys_mem, memmap[ESP32S2_MEMREGION_IRAM].base, iram);
 
     memory_region_init_ram(icache0, NULL, "esp32.icache0",
                            memmap[ESP32S2_MEMREGION_ICACHE0].size, &error_fatal);
@@ -739,6 +748,7 @@ static uint64_t ESP32S2_unimp_read(void *opaque, hwaddr addr, unsigned int size)
    63th block for bootloader_flash_read
 */
 #define MMU_BLOCK0_VADDR  SOC_DROM_LOW
+// 4MB
 #define MMU_SIZE          (0x3f0000)
 #define MMU_BLOCK63_VADDR (MMU_BLOCK0_VADDR + MMU_SIZE)
 #define FLASH_READ_VADDR MMU_BLOCK63_VADDR
