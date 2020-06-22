@@ -131,6 +131,7 @@ typedef struct Esp32UnimpState {
 
     BlockBackend *flash_blk;
     uint32_t mmu_table[0x1000];
+    uint32_t cache_value;
     MemoryRegion iomem;
     qemu_irq irq;
 } Esp32UnimpState;
@@ -711,7 +712,7 @@ static void ESP32S2_machine_init_openeth(Esp32S2SocState *ss)
 static uint64_t ESP32S2_unimp_read(void *opaque, hwaddr addr, unsigned int size)
 {
     Esp32UnimpState *s = ESP32S2_UNIMP(opaque);
-    //printf("unimp read  %08X\n",(unsigned int)addr);
+    printf("unimp read  %08X\n",(unsigned int)addr);
 
     uint64_t r = 0;
     switch (addr) {
@@ -723,13 +724,28 @@ static uint64_t ESP32S2_unimp_read(void *opaque, hwaddr addr, unsigned int size)
 
 
     case 0x40:
-       r=0x80000;
-       break;
     case 0x44:
     case 0x114:
+    case 0x11C:
     case 0x60:
-        r = 0x200;
-        break;
+        {
+            r=s->cache_value;
+            if (s->cache_value==0x1) {
+                printf(".\n");
+                s->cache_value=0x80000;    
+            } else if (s->cache_value==0x80000) {
+                printf("o\n");
+                s->cache_value=0x200000;
+            } else if (s->cache_value==0x200000) {
+                printf("x\n");
+                s->cache_value=0x200;
+            } else {
+                s->cache_value=0x1;
+            }
+        }
+       break;
+        //r = 0x200;
+        //break;
 
     case 0x1200 ... 0x1400: 
     {
@@ -981,14 +997,30 @@ static void ESP32S2_unimp_write(void *opaque, hwaddr addr,
                        uint64_t value, unsigned int size)
 {
     Esp32UnimpState *s = ESP32S2_UNIMP(opaque);
-    //printf("unimp write  %08X,%08X\n",(unsigned int)addr,(unsigned int)value);
+    printf("unimp write  %08X,%08X\n",(unsigned int)addr,(unsigned int)value);
     //if (value!=0x4000) printf("unimp write  %08X,%08X\n",(unsigned int)addr,(unsigned int)value);
+
+
+
+
     uint32_t tmp_flash_cache[ESP32S2_CACHE_PAGE_SIZE*4];
     if ((value & 0x8000) == 0x8000) {
             printf("** Unimp write  %08X,%08X\n",(unsigned int)addr,(unsigned int)value);
     }
 
     switch (addr) {
+        case 0x40:
+        {
+            if (value==0x100) {
+                s->cache_value=0x80000;
+            }
+            else {
+                s->cache_value=value;
+            }
+        }
+        break;
+
+
         // 0x61801000
         case 0x1000 ... 0x1100: {
             // FLASH_MMU_TABLE
