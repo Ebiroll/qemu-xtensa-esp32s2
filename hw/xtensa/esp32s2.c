@@ -58,7 +58,7 @@ typedef struct XtensaCPU XtensaCPU;
 
 enum {
     ESP32S2_MEMREGION_IROM,
-    ESP32S2_MEMREGION_IROM1,
+    ESP32S2_MEMREGION_DROM1,
     ESP32S2_MEMREGION_DROM,
     ESP32S2_MEMREGION_DRAM,
     ESP32S2_MEMREGION_IRAM,
@@ -105,7 +105,7 @@ static const struct MemmapEntry {
 } ESP32S2_memmap[] = {
     [ESP32S2_MEMREGION_DROM] = { SOC_DROM_LOW, SOC_DROM_HIGH-SOC_DROM_LOW},
     [ESP32S2_MEMREGION_IROM] = { 0x40000000, 0x80000 },
-    [ESP32S2_MEMREGION_IROM1] = { 0x3ffa0000, 0x10000 },
+    [ESP32S2_MEMREGION_DROM1] = { 0x3ffa0000, 0x10000 },
     [ESP32S2_MEMREGION_DRAM] = {  0x3FFB0000 /*SOC_DRAM_LOW  */, 0x50000 /* 32K + 288KB */},
     [ESP32S2_MEMREGION_IRAM] = {  0x40020000 /* SOC_IRAM_LOW */,0x50000 /* 32K + 288KB */},
     [ESP32S2_MEMREGION_ICACHE0] = { SOC_DROM_LOW ,0xF80000 },  // 4MB, 0x8000 on esp32, emulation where cache is handled correctly
@@ -123,7 +123,7 @@ static const struct MemmapEntry {
 #define ESP32S2_SOC_RESET_RTC       0x8
 #define ESP32S2_SOC_RESET_ALL       (ESP32S2_SOC_RESET_RTC | ESP32S2_SOC_RESET_DIG)
 
-#define TYPE_ESP32S2_MYUNIMP     "esp32.myunimp"
+#define TYPE_ESP32S2_MYUNIMP     "esp32s2.myunimp"
 
 
 typedef struct Esp32UnimpState {
@@ -309,10 +309,10 @@ static void ESP32S2_soc_realize(DeviceState *dev, Error **errp)
 
     MemoryRegion *dram = g_new(MemoryRegion, 1);
     MemoryRegion *iram = g_new(MemoryRegion, 1);
-    //MemoryRegion *drom = g_new(MemoryRegion, 1);
+    MemoryRegion *drom = g_new(MemoryRegion, 1);
     MemoryRegion *irom = g_new(MemoryRegion, 1);
     // irom1 is acually data rom...
-    MemoryRegion *irom1 = g_new(MemoryRegion, 1);
+    //MemoryRegion *irom1 = g_new(MemoryRegion, 1);
 
     MemoryRegion *icache0 = g_new(MemoryRegion, 1);
     MemoryRegion *icache1 = g_new(MemoryRegion, 1);
@@ -320,48 +320,48 @@ static void ESP32S2_soc_realize(DeviceState *dev, Error **errp)
     MemoryRegion *rtcfast_i = g_new(MemoryRegion, 1);
     MemoryRegion *rtcfast_d = g_new(MemoryRegion, 1);
 
-    memory_region_init_rom(irom, NULL, "esp32.irom",
+    memory_region_init_rom(irom, NULL, "esp32s2.irom",
                            memmap[ESP32S2_MEMREGION_IROM].size, &error_fatal);
     memory_region_add_subregion(sys_mem, memmap[ESP32S2_MEMREGION_IROM].base, irom);
 
-    memory_region_init_rom(irom1, NULL, "esp32.irom1",
-                           memmap[ESP32S2_MEMREGION_IROM1].size, &error_fatal);
-    memory_region_add_subregion(sys_mem, memmap[ESP32S2_MEMREGION_IROM1].base, irom1);
+    //memory_region_init_rom(irom1, NULL, "esp32s2.irom1",
+    //                       memmap[ESP32S2_MEMREGION_IROM1].size, &error_fatal);
+    //memory_region_add_subregion(sys_mem, memmap[ESP32S2_MEMREGION_IROM1].base, irom1);
 
 
-    //memory_region_init_alias(drom, NULL, "esp32.drom", irom, 0x60000, memmap[ESP32S2_MEMREGION_DROM].size);
-    //memory_region_add_subregion(sys_mem, memmap[ESP32S2_MEMREGION_DROM].base, drom);
+    memory_region_init_alias(drom, NULL, "esp32s2.drom", irom, 0xffff, memmap[ESP32S2_MEMREGION_DROM].size);
+    memory_region_add_subregion(sys_mem, memmap[ESP32S2_MEMREGION_DROM1].base, drom);
 
-    memory_region_init_ram(dram, NULL, "esp32.dram",
+    memory_region_init_ram(dram, NULL, "esp32s2.dram",
                            memmap[ESP32S2_MEMREGION_DRAM].size, &error_fatal);
     memory_region_add_subregion(sys_mem, memmap[ESP32S2_MEMREGION_DRAM].base, dram);
 
-    memory_region_init_alias(iram, NULL, "esp32.iram", dram, 0x0, memmap[ESP32S2_MEMREGION_DRAM].size);
+    memory_region_init_alias(iram, NULL, "esp32s2.iram", dram, 0x0, memmap[ESP32S2_MEMREGION_DRAM].size);
     memory_region_add_subregion(sys_mem, memmap[ESP32S2_MEMREGION_IRAM].base, iram);
 
-    //memory_region_init_ram(iram, NULL, "esp32.iram",
+    //memory_region_init_ram(iram, NULL, "esp32s2.iram",
     //                       memmap[ESP32S2_MEMREGION_IRAM].size, &error_fatal);
     //memory_region_add_subregion(sys_mem, memmap[ESP32S2_MEMREGION_IRAM].base, iram);
 
-    memory_region_init_ram(icache0, NULL, "esp32.icache0",
+    memory_region_init_ram(icache0, NULL, "esp32s2.icache0",
                            memmap[ESP32S2_MEMREGION_ICACHE0].size, &error_fatal);
     memory_region_add_subregion(sys_mem, memmap[ESP32S2_MEMREGION_ICACHE0].base, icache0);
 
-    memory_region_init_ram(icache1, NULL, "esp32.icache1",
+    memory_region_init_ram(icache1, NULL, "esp32s2.icache1",
                            memmap[ESP32S2_MEMREGION_ICACHE1].size, &error_fatal);
     memory_region_add_subregion(sys_mem, memmap[ESP32S2_MEMREGION_ICACHE1].base, icache1);
 
-    memory_region_init_ram(rtcslow, NULL, "esp32.rtcslow",
+    memory_region_init_ram(rtcslow, NULL, "esp32s2.rtcslow",
                            memmap[ESP32S2_MEMREGION_RTCSLOW].size, &error_fatal);
     memory_region_add_subregion(sys_mem, memmap[ESP32S2_MEMREGION_RTCSLOW].base, rtcslow);
 
     /* RTC Fast memory is only accessible by the PRO CPU */
 
-    memory_region_init_ram(rtcfast_i, NULL, "esp32.rtcfast_i",
+    memory_region_init_ram(rtcfast_i, NULL, "esp32s2.rtcfast_i",
                            memmap[ESP32S2_MEMREGION_RTCSLOW].size, &error_fatal);
     memory_region_add_subregion(&s->cpu_specific_mem[0], memmap[ESP32S2_MEMREGION_RTCFAST_I].base, rtcfast_i);
 
-    memory_region_init_alias(rtcfast_d, NULL, "esp32.rtcfast_d", rtcfast_i, 0, memmap[ESP32S2_MEMREGION_RTCFAST_D].size);
+    memory_region_init_alias(rtcfast_d, NULL, "esp32s2.rtcfast_d", rtcfast_i, 0, memmap[ESP32S2_MEMREGION_RTCFAST_D].size);
     memory_region_add_subregion(&s->cpu_specific_mem[0], memmap[ESP32S2_MEMREGION_RTCFAST_D].base, rtcfast_d);
 
     for (int i = 0; i < ms->smp.cpus; ++i) {
@@ -462,26 +462,26 @@ static void ESP32S2_soc_realize(DeviceState *dev, Error **errp)
 
 
 
-    ESP32S2_soc_add_unimp_device(sys_mem, "esp32.extmem", S2_DR_REG_EXTMEM_BASE, 0x1000);
+    ESP32S2_soc_add_unimp_device(sys_mem, "esp32s2.extmem", S2_DR_REG_EXTMEM_BASE, 0x1000);
 //  0x6000E044
-    ESP32S2_soc_add_unimp_device(sys_mem, "esp32.analog", 0x6000E000, 0x1000);
-    ESP32S2_soc_add_unimp_device(sys_mem, "esp32.rtcio", S2_DR_REG_RTCIO_BASE, 0x400);
-    ESP32S2_soc_add_unimp_device(sys_mem, "esp32.rtcio", S2_DR_REG_SENS_BASE, 0x400);
-    ESP32S2_soc_add_unimp_device(sys_mem, "esp32.iomux", S2_DR_REG_IO_MUX_BASE, 0x2000);
-    ESP32S2_soc_add_unimp_device(sys_mem, "esp32.hinf", S2_DR_REG_HINF_BASE, 0x1000);
-    ESP32S2_soc_add_unimp_device(sys_mem, "esp32.slc", S2_DR_REG_SLC_BASE, 0x1000);
-    ESP32S2_soc_add_unimp_device(sys_mem, "esp32.slchost", S2_DR_REG_SLCHOST_BASE, 0x1000);
-    ESP32S2_soc_add_unimp_device(sys_mem, "esp32.apbctrl", S2_DR_REG_APB_CTRL_BASE, 0x1000);
-    ESP32S2_soc_add_unimp_device(sys_mem, "esp32.i2s0", S2_DR_REG_I2S_BASE, 0x1000);
-    //ESP32S2_soc_add_unimp_device(sys_mem, "esp32.i2s1", S2_DR_REG_I2S1_BASE, 0x1000);
-    ESP32S2_soc_add_unimp_device(sys_mem, "esp32.i2c0", S2_DR_REG_I2C_EXT_BASE, 0x1000);
-    ESP32S2_soc_add_unimp_device(sys_mem, "esp32.i2c1", S2_DR_REG_I2C1_EXT_BASE, 0x1000);
-    ESP32S2_soc_add_unimp_device(sys_mem, "esp32.usb", S2_DR_REG_USB_BASE, 0x1000);
-    //ESP32S2_soc_add_unimp_device(sys_mem, "esp32.rndreg", 0x60035000, 0x1000);
+    ESP32S2_soc_add_unimp_device(sys_mem, "esp32s2.analog", 0x6000E000, 0x1000);
+    ESP32S2_soc_add_unimp_device(sys_mem, "esp32s2.rtcio", S2_DR_REG_RTCIO_BASE, 0x400);
+    ESP32S2_soc_add_unimp_device(sys_mem, "esp32s2.rtcio", S2_DR_REG_SENS_BASE, 0x400);
+    ESP32S2_soc_add_unimp_device(sys_mem, "esp32s2.iomux", S2_DR_REG_IO_MUX_BASE, 0x2000);
+    ESP32S2_soc_add_unimp_device(sys_mem, "esp32s2.hinf", S2_DR_REG_HINF_BASE, 0x1000);
+    ESP32S2_soc_add_unimp_device(sys_mem, "esp32s2.slc", S2_DR_REG_SLC_BASE, 0x1000);
+    ESP32S2_soc_add_unimp_device(sys_mem, "esp32s2.slchost", S2_DR_REG_SLCHOST_BASE, 0x1000);
+    ESP32S2_soc_add_unimp_device(sys_mem, "esp32s2.apbctrl", S2_DR_REG_APB_CTRL_BASE, 0x1000);
+    ESP32S2_soc_add_unimp_device(sys_mem, "esp32s2.i2s0", S2_DR_REG_I2S_BASE, 0x1000);
+    //ESP32S2_soc_add_unimp_device(sys_mem, "esp32s2.i2s1", S2_DR_REG_I2S1_BASE, 0x1000);
+    ESP32S2_soc_add_unimp_device(sys_mem, "esp32s2.i2c0", S2_DR_REG_I2C_EXT_BASE, 0x1000);
+    ESP32S2_soc_add_unimp_device(sys_mem, "esp32s2.i2c1", S2_DR_REG_I2C1_EXT_BASE, 0x1000);
+    ESP32S2_soc_add_unimp_device(sys_mem, "esp32s2.usb", S2_DR_REG_USB_BASE, 0x1000);
+    //ESP32S2_soc_add_unimp_device(sys_mem, "esp32s2.rndreg", 0x60035000, 0x1000);
 
     
 
-    //ESP32S2_soc_add_unimp_device(sys_mem, "esp32.unknown", 0x61801000, 0x1000);
+    //ESP32S2_soc_add_unimp_device(sys_mem, "esp32s2.unknown", 0x61801000, 0x1000);
 
     object_property_set_bool(OBJECT(&s->myunimp), true, "realized", &error_abort);
     ESP32S2_soc_add_periph_device(sys_mem, &s->myunimp, 0x61800000);
@@ -591,14 +591,14 @@ static void esp32s2_soc_init(Object *obj)
     qdev_init_gpio_in_named(DEVICE(s), ESP32S2_clk_update, ESP32_RTC_CLK_UPDATE_GPIO, 1);
 
     const char *rom_filename = "s2rom.bin";
-    const char *irom_filename = "irom1.bin";
+    //const char *irom_filename = "irom1.bin";
 
-    irom_filename = qemu_find_file(QEMU_FILE_TYPE_BIOS, irom_filename);
-    if (!irom_filename ||
-        load_image_targphys(irom_filename, 0x3ffa0000, 64*1024) < 0) { 
-        error_report("unable to load ROM image '%s'\n", irom_filename);
-        exit(EXIT_FAILURE);
-    }
+    //irom_filename = qemu_find_file(QEMU_FILE_TYPE_BIOS, irom_filename);
+    //if (!irom_filename ||
+    //    load_image_targphys(irom_filename, 0x3ffa0000, 64*1024) < 0) { 
+    //    error_report("unable to load ROM image '%s'\n", irom_filename);
+    //    exit(EXIT_FAILURE);
+    //}
 /* 0x3ffa0000 and 0x40010000 maps to same data, Data and Instrucions
     if (!irom_filename ||
         load_image_targphys(irom_filename, 0x40010000, 64*1024) < 0) { 
@@ -1188,7 +1188,7 @@ static void ESP32S2_machine_inst_init(MachineState *machine)
     // TODO, Figure out MMU mapping and related finetuning
       MemoryRegion *ram;
       ram = g_malloc(sizeof(*ram));
-      memory_region_init_ram(ram, NULL, "esp32.iram0", 0x20000000,  // 00000
+      memory_region_init_ram(ram, NULL, "esp32s2.iram0", 0x20000000,  // 00000
                            &error_abort);
 
       vmstate_register_ram_global(ram);

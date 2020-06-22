@@ -88,7 +88,7 @@ static uint64_t esp32_spi_read(void *opaque, hwaddr addr, unsigned int size)
         break;
     }
 
-    printf("spi read  %08X,%08X\n",(unsigned int)addr,(unsigned int)r);
+    //printf("spi read  %08X,%08X\n",(unsigned int)addr,(unsigned int)r);
 
     return r;
 }
@@ -138,7 +138,7 @@ static void esp32_spi_write(void *opaque, hwaddr addr,
         esp32_spi_do_command(s, value);
         break;
     }
-    printf("spi write  %08X,%08X\n",(unsigned int)addr,(unsigned int)value);
+    //printf("spi write  %08X,%08X\n",(unsigned int)addr,(unsigned int)value);
 
 }
 
