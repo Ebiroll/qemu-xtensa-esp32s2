@@ -14,10 +14,10 @@ jobs:
     - name: Compile qemu
       run: |
         mkdir qemu_esp32s2
-	cd $GITHUB_WORKSPACE/
-	git submodule update --init meson
+        cd $GITHUB_WORKSPACE/
+        git submodule update --init meson
         cd
-	cd qemu_esp32s2
+        cd qemu_esp32s2
         $GITHUB_WORKSPACE/configure --disable-werror --prefix=./root --enable-debug --enable-sanitizers  --disable-capstone   --disable-strip --target-list=xtensa-softmmu,riscv32-softmmu 
         make -j 2
     - uses: actions/upload-artifact@master
