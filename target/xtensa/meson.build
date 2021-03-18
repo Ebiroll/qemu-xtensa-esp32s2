@@ -20,6 +20,8 @@ xtensa_ss.add(files(
   'win_helper.c',
   'xtensa-isa.c',
 ))
+#  'core-esp32s2.c',
+
 
 xtensa_softmmu_ss = ss.source_set()
 xtensa_softmmu_ss.add(files(
