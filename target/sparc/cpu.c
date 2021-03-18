@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -801,12 +801,9 @@ static void sparc_set_nwindows(Object *obj, Visitor *v, const char *name,
     const int64_t min = MIN_NWINDOWS;
     const int64_t max = MAX_NWINDOWS;
     SPARCCPU *cpu = SPARC_CPU(obj);
-    Error *err = NULL;
     int64_t value;
 
-    visit_type_int(v, name, &value, &err);
-    if (err) {
-        error_propagate(errp, err);
+    if (!visit_type_int(v, name, &value, errp)) {
         return;
     }
 

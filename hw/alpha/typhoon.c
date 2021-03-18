@@ -15,6 +15,7 @@
 #include "hw/irq.h"
 #include "alpha_sys.h"
 #include "exec/address-spaces.h"
+#include "qom/object.h"
 
 
 #define TYPE_TYPHOON_PCI_HOST_BRIDGE "typhoon-pcihost"
@@ -49,16 +50,15 @@ typedef struct TyphoonPchip {
     TyphoonWindow win[4];
 } TyphoonPchip;
 
-#define TYPHOON_PCI_HOST_BRIDGE(obj) \
-    OBJECT_CHECK(TyphoonState, (obj), TYPE_TYPHOON_PCI_HOST_BRIDGE)
+OBJECT_DECLARE_SIMPLE_TYPE(TyphoonState, TYPHOON_PCI_HOST_BRIDGE)
 
-typedef struct TyphoonState {
+struct TyphoonState {
     PCIHostState parent_obj;
 
     TyphoonCchip cchip;
     TyphoonPchip pchip;
     MemoryRegion dchip_region;
-} TyphoonState;
+};
 
 /* Called when one of DRIR or DIM changes.  */
 static void cpu_irq_change(AlphaCPU *cpu, uint64_t req)
@@ -826,7 +826,7 @@ PCIBus *typhoon_init(MemoryRegion *ram, ISABus **isa_bus, qemu_irq *p_rtc_irq,
     PCIBus *b;
     int i;
 
-    dev = qdev_create(NULL, TYPE_TYPHOON_PCI_HOST_BRIDGE);
+    dev = qdev_new(TYPE_TYPHOON_PCI_HOST_BRIDGE);
 
     s = TYPHOON_PCI_HOST_BRIDGE(dev);
     phb = PCI_HOST_BRIDGE(dev);
@@ -889,7 +889,7 @@ PCIBus *typhoon_init(MemoryRegion *ram, ISABus **isa_bus, qemu_irq *p_rtc_irq,
                               &s->pchip.reg_mem, &s->pchip.reg_io,
                               0, 64, TYPE_PCI_BUS);
     phb->bus = b;
-    qdev_init_nofail(dev);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
 
     /* Host memory as seen from the PCI side, via the IOMMU.  */
     memory_region_init_iommu(&s->pchip.iommu, sizeof(s->pchip.iommu),

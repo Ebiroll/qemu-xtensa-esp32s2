@@ -29,6 +29,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu/log.h"
 #include "cpu.h"
 #include "qapi/visitor.h"
 #include "qemu/range.h"
@@ -312,10 +313,12 @@ void ich9_generate_smi(void)
     cpu_interrupt(first_cpu, CPU_INTERRUPT_SMI);
 }
 
+/* Returns -1 on error, IRQ number on success */
 static int ich9_lpc_sci_irq(ICH9LPCState *lpc)
 {
-    switch (lpc->d.config[ICH9_LPC_ACPI_CTRL] &
-            ICH9_LPC_ACPI_CTRL_SCI_IRQ_SEL_MASK) {
+    uint8_t sel = lpc->d.config[ICH9_LPC_ACPI_CTRL] &
+                  ICH9_LPC_ACPI_CTRL_SCI_IRQ_SEL_MASK;
+    switch (sel) {
     case ICH9_LPC_ACPI_CTRL_9:
         return 9;
     case ICH9_LPC_ACPI_CTRL_10:
@@ -328,6 +331,8 @@ static int ich9_lpc_sci_irq(ICH9LPCState *lpc)
         return 21;
     default:
         /* reserved */
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "ICH9 LPC: SCI IRQ SEL #%u is reserved\n", sel);
         break;
     }
     return -1;
@@ -371,6 +376,15 @@ static void smi_features_ok_callback(void *opaque)
     le64_to_cpus(&guest_features);
     if (guest_features & ~lpc->smi_host_features) {
         /* guest requests invalid features, leave @features_ok at zero */
+        return;
+    }
+    if (!(guest_features & BIT_ULL(ICH9_LPC_SMI_F_BROADCAST_BIT)) &&
+        guest_features & (BIT_ULL(ICH9_LPC_SMI_F_CPU_HOTPLUG_BIT) |
+                          BIT_ULL(ICH9_LPC_SMI_F_CPU_HOT_UNPLUG_BIT))) {
+        /*
+         * cpu hot-[un]plug with SMI requires SMI broadcast,
+         * leave @features_ok at zero
+         */
         return;
     }
 
@@ -450,7 +464,7 @@ ich9_lpc_pmbase_sci_update(ICH9LPCState *lpc)
 {
     uint32_t pm_io_base = pci_get_long(lpc->d.config + ICH9_LPC_PMBASE);
     uint8_t acpi_cntl = pci_get_long(lpc->d.config + ICH9_LPC_ACPI_CTRL);
-    uint8_t new_gsi;
+    int new_gsi;
 
     if (acpi_cntl & ICH9_LPC_ACPI_CTRL_ACPI_EN) {
         pm_io_base &= ICH9_LPC_PMBASE_BASE_ADDRESS_MASK;
@@ -461,6 +475,9 @@ ich9_lpc_pmbase_sci_update(ICH9LPCState *lpc)
     ich9_pm_iospace_update(&lpc->pm, pm_io_base);
 
     new_gsi = ich9_lpc_sci_irq(lpc);
+    if (new_gsi == -1) {
+        return;
+    }
     if (lpc->sci_level && new_gsi != lpc->sci_gsi) {
         qemu_set_irq(lpc->pm.irq, 0);
         lpc->sci_gsi = new_gsi;
@@ -633,13 +650,16 @@ static void ich9_lpc_initfn(Object *obj)
     static const uint8_t acpi_disable_cmd = ICH9_APM_ACPI_DISABLE;
 
     object_property_add_uint8_ptr(obj, ACPI_PM_PROP_SCI_INT,
-                                  &lpc->sci_gsi, OBJ_PROP_FLAG_READ, NULL);
+                                  &lpc->sci_gsi, OBJ_PROP_FLAG_READ);
     object_property_add_uint8_ptr(OBJECT(lpc), ACPI_PM_PROP_ACPI_ENABLE_CMD,
-                                  &acpi_enable_cmd, OBJ_PROP_FLAG_READ, NULL);
+                                  &acpi_enable_cmd, OBJ_PROP_FLAG_READ);
     object_property_add_uint8_ptr(OBJECT(lpc), ACPI_PM_PROP_ACPI_DISABLE_CMD,
-                                  &acpi_disable_cmd, OBJ_PROP_FLAG_READ, NULL);
+                                  &acpi_disable_cmd, OBJ_PROP_FLAG_READ);
+    object_property_add_uint64_ptr(obj, ICH9_LPC_SMI_NEGOTIATED_FEAT_PROP,
+                                   &lpc->smi_negotiated_features,
+                                   OBJ_PROP_FLAG_READ);
 
-    ich9_pm_add_properties(obj, &lpc->pm, NULL);
+    ich9_pm_add_properties(obj, &lpc->pm);
 }
 
 static void ich9_lpc_realize(PCIDevice *d, Error **errp)
@@ -747,6 +767,10 @@ static Property ich9_lpc_properties[] = {
     DEFINE_PROP_BOOL("noreboot", ICH9LPCState, pin_strap.spkr_hi, true),
     DEFINE_PROP_BIT64("x-smi-broadcast", ICH9LPCState, smi_host_features,
                       ICH9_LPC_SMI_F_BROADCAST_BIT, true),
+    DEFINE_PROP_BIT64("x-smi-cpu-hotplug", ICH9LPCState, smi_host_features,
+                      ICH9_LPC_SMI_F_CPU_HOTPLUG_BIT, true),
+    DEFINE_PROP_BIT64("x-smi-cpu-hotunplug", ICH9LPCState, smi_host_features,
+                      ICH9_LPC_SMI_F_CPU_HOT_UNPLUG_BIT, false),
     DEFINE_PROP_END_OF_LIST(),
 };
 
@@ -792,7 +816,7 @@ static void ich9_lpc_class_init(ObjectClass *klass, void *data)
 static const TypeInfo ich9_lpc_info = {
     .name       = TYPE_ICH9_LPC_DEVICE,
     .parent     = TYPE_PCI_DEVICE,
-    .instance_size = sizeof(struct ICH9LPCState),
+    .instance_size = sizeof(ICH9LPCState),
     .instance_init = ich9_lpc_initfn,
     .class_init  = ich9_lpc_class_init,
     .interfaces = (InterfaceInfo[]) {

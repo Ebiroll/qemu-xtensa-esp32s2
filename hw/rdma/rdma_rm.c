@@ -147,14 +147,13 @@ static inline void rdma_res_tbl_dealloc(RdmaRmResTbl *tbl, uint32_t handle)
 {
     trace_rdma_res_tbl_dealloc(tbl->name, handle);
 
-    qemu_mutex_lock(&tbl->lock);
+    QEMU_LOCK_GUARD(&tbl->lock);
 
     if (handle < tbl->tbl_sz) {
         clear_bit(handle, tbl->bitmap);
         tbl->used--;
     }
 
-    qemu_mutex_unlock(&tbl->lock);
 }
 
 int rdma_rm_alloc_pd(RdmaDeviceResources *dev_res, RdmaBackendDev *backend_dev,
@@ -791,7 +790,7 @@ int rdma_rm_init(RdmaDeviceResources *dev_res, struct ibv_device_attr *dev_attr)
     qemu_mutex_init(&dev_res->lock);
 
     memset(&dev_res->stats, 0, sizeof(dev_res->stats));
-    atomic_set(&dev_res->stats.missing_cqe, 0);
+    qatomic_set(&dev_res->stats.missing_cqe, 0);
 
     return 0;
 }

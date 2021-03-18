@@ -30,8 +30,9 @@
 static int compress_open(BlockDriverState *bs, QDict *options, int flags,
                          Error **errp)
 {
-    bs->file = bdrv_open_child(NULL, options, "file", bs, &child_file, false,
-                               errp);
+    bs->file = bdrv_open_child(NULL, options, "file", bs, &child_of_bds,
+                               BDRV_CHILD_FILTERED | BDRV_CHILD_PRIMARY,
+                               false, errp);
     if (!bs->file) {
         return -EINVAL;
     }
@@ -132,7 +133,7 @@ static BlockDriver bdrv_compress = {
     .format_name                        = "compress",
 
     .bdrv_open                          = compress_open,
-    .bdrv_child_perm                    = bdrv_filter_default_perms,
+    .bdrv_child_perm                    = bdrv_default_perms,
 
     .bdrv_getlength                     = compress_getlength,
 
@@ -144,8 +145,6 @@ static BlockDriver bdrv_compress = {
 
     .bdrv_eject                         = compress_eject,
     .bdrv_lock_medium                   = compress_lock_medium,
-
-    .bdrv_co_block_status               = bdrv_co_block_status_from_file,
 
     .has_variable_length                = true,
     .is_filter                          = true,

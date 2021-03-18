@@ -18,6 +18,7 @@
 
 #include "ui/console.h"
 #include "ui/qemu-pixman.h"
+#include "qom/object.h"
 
 typedef struct BochsDisplayMode {
     pixman_format_code_t format;
@@ -29,7 +30,7 @@ typedef struct BochsDisplayMode {
     uint64_t             size;
 } BochsDisplayMode;
 
-typedef struct BochsDisplayState {
+struct BochsDisplayState {
     /* parent */
     PCIDevice        pci;
 
@@ -53,11 +54,10 @@ typedef struct BochsDisplayState {
 
     /* device state */
     BochsDisplayMode mode;
-} BochsDisplayState;
+};
 
 #define TYPE_BOCHS_DISPLAY "bochs-display"
-#define BOCHS_DISPLAY(obj) OBJECT_CHECK(BochsDisplayState, (obj), \
-                                        TYPE_BOCHS_DISPLAY)
+OBJECT_DECLARE_SIMPLE_TYPE(BochsDisplayState, BOCHS_DISPLAY)
 
 static const VMStateDescription vmstate_bochs_display = {
     .name = "bochs-display",
@@ -267,15 +267,17 @@ static void bochs_display_realize(PCIDevice *dev, Error **errp)
     Object *obj = OBJECT(dev);
     int ret;
 
-    s->con = graphic_console_init(DEVICE(dev), 0, &bochs_display_gfx_ops, s);
-
     if (s->vgamem < 4 * MiB) {
         error_setg(errp, "bochs-display: video memory too small");
+        return;
     }
     if (s->vgamem > 256 * MiB) {
         error_setg(errp, "bochs-display: video memory too big");
+        return;
     }
     s->vgamem = pow2ceil(s->vgamem);
+
+    s->con = graphic_console_init(DEVICE(dev), 0, &bochs_display_gfx_ops, s);
 
     memory_region_init_ram(&s->vram, obj, "bochs-display-vram", s->vgamem,
                            &error_fatal);
@@ -331,8 +333,7 @@ static void bochs_display_init(Object *obj)
     /* Expose framebuffer byteorder via QOM */
     object_property_add_bool(obj, "big-endian-framebuffer",
                              bochs_display_get_big_endian_fb,
-                             bochs_display_set_big_endian_fb,
-                             NULL);
+                             bochs_display_set_big_endian_fb);
 
     dev->cap_present |= QEMU_PCI_CAP_EXPRESS;
 }

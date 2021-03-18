@@ -44,7 +44,8 @@ class TestBlockdevReopen(iotests.QMPTestCase):
 
     def setUp(self):
         qemu_img('create', '-f', iotests.imgfmt, hd_path[0], '3M')
-        qemu_img('create', '-f', iotests.imgfmt, '-b', hd_path[0], hd_path[1])
+        qemu_img('create', '-f', iotests.imgfmt, '-b', hd_path[0],
+                 '-F', iotests.imgfmt, hd_path[1])
         qemu_img('create', '-f', iotests.imgfmt, hd_path[2], '3M')
         qemu_io('-f', iotests.imgfmt, '-c', 'write -P 0xa0  0 1M', hd_path[0])
         qemu_io('-f', iotests.imgfmt, '-c', 'write -P 0xa1 1M 1M', hd_path[1])
@@ -724,7 +725,9 @@ class TestBlockdevReopen(iotests.QMPTestCase):
 
         # Detach hd2 from hd0.
         self.reopen(opts, {'backing': None})
-        self.reopen(opts, {}, "backing is missing for 'hd0'")
+
+        # Without a backing file, we can omit 'backing' again
+        self.reopen(opts)
 
         # Remove both hd0 and hd2
         result = self.vm.qmp('blockdev-del', conv_keys = True, node_name = 'hd0')
@@ -1027,5 +1030,6 @@ class TestBlockdevReopen(iotests.QMPTestCase):
         self.run_test_iothreads(None, 'iothread0')
 
 if __name__ == '__main__':
+    iotests.activate_logging()
     iotests.main(supported_fmts=["qcow2"],
                  supported_protocols=["file"])

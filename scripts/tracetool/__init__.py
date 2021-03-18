@@ -9,7 +9,7 @@ __copyright__  = "Copyright 2012-2017, Lluís Vilanova <vilanova@ac.upc.edu>"
 __license__    = "GPL version 2 or (at your option) any later version"
 
 __maintainer__ = "Stefan Hajnoczi"
-__email__      = "stefanha@linux.vnet.ibm.com"
+__email__      = "stefanha@redhat.com"
 
 
 import re
@@ -34,7 +34,7 @@ def error(*lines):
 def out(*lines, **kwargs):
     """Write a set of output lines.
 
-    You can use kwargs as a shorthand for mapping variables when formating all
+    You can use kwargs as a shorthand for mapping variables when formatting all
     the strings in lines.
     """
     lines = [ l % kwargs for l in lines ]

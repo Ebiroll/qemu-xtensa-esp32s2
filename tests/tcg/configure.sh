@@ -46,20 +46,29 @@ fi
 : ${cross_cc_aarch64="aarch64-linux-gnu-gcc"}
 : ${cross_cc_aarch64_be="$cross_cc_aarch64"}
 : ${cross_cc_cflags_aarch64_be="-mbig-endian"}
+: $(cross_cc_alpha="alpha-linux-gnu-gcc")
 : ${cross_cc_arm="arm-linux-gnueabihf-gcc"}
 : ${cross_cc_cflags_armeb="-mbig-endian"}
+: ${cross_cc_hppa="hppa-linux-gnu-gcc"}
 : ${cross_cc_i386="i386-pc-linux-gnu-gcc"}
 : ${cross_cc_cflags_i386="-m32"}
-: ${cross_cc_x86_64="x86_64-pc-linux-gnu-gcc"}
-: ${cross_cc_cflags_x86_64="-m64"}
+: ${cross_cc_m68k="m68k-linux-gnu-gcc"}
+: $(cross_cc_mips64el="mips64el-linux-gnuabi64-gcc")
+: $(cross_cc_mips64="mips64-linux-gnuabi64-gcc")
+: $(cross_cc_mipsel="mipsel-linux-gnu-gcc")
+: $(cross_cc_mips="mips-linux-gnu-gcc")
 : ${cross_cc_ppc="powerpc-linux-gnu-gcc"}
 : ${cross_cc_cflags_ppc="-m32"}
-: ${cross_cc_ppc64="powerpc-linux-gnu-gcc"}
-: ${cross_cc_cflags_ppc64="-m64"}
+: ${cross_cc_ppc64="powerpc64-linux-gnu-gcc"}
 : ${cross_cc_ppc64le="powerpc64le-linux-gnu-gcc"}
-: ${cross_cc_cflags_s390x="-m64"}
+: $(cross_cc_riscv64="riscv64-linux-gnu-gcc")
+: ${cross_cc_s390x="s390x-linux-gnu-gcc"}
+: $(cross_cc_sh4="sh4-linux-gnu-gcc")
 : ${cross_cc_cflags_sparc="-m32 -mv8plus -mcpu=ultrasparc"}
+: ${cross_cc_sparc64="sparc64-linux-gnu-gcc"}
 : ${cross_cc_cflags_sparc64="-m64 -mcpu=ultrasparc"}
+: ${cross_cc_x86_64="x86_64-pc-linux-gnu-gcc"}
+: ${cross_cc_cflags_x86_64="-m64"}
 
 for target in $target_list; do
   arch=${target%%-*}
@@ -85,7 +94,7 @@ for target in $target_list; do
     xtensa|xtensaeb)
       arches=xtensa
       ;;
-    alpha|cris|hppa|i386|lm32|m68k|openrisc|riscv64|s390x|sh4|sparc64)
+    alpha|cris|hppa|i386|lm32|microblaze|microblazeel|m68k|openrisc|riscv64|s390x|sh4|sparc64)
       arches=$target
       ;;
     *)
@@ -97,8 +106,8 @@ for target in $target_list; do
   case $target in
     aarch64-*)
       # We don't have any bigendian build tools so we only use this for AArch64
-      container_image=debian-arm64-cross
-      container_cross_cc=aarch64-linux-gnu-gcc
+      container_image=debian-arm64-test-cross
+      container_cross_cc=aarch64-linux-gnu-gcc-10
       ;;
     alpha-*)
       container_image=debian-alpha-cross
@@ -173,7 +182,7 @@ for target in $target_list; do
       container_image=debian-xtensa-cross
 
       # default to the dc232b cpu
-      container_cross_cc=/opt/2018.02/xtensa-dc232b-elf/bin/xtensa-dc232b-elf-gcc
+      container_cross_cc=/opt/2020.07/xtensa-dc232b-elf/bin/xtensa-dc232b-elf-gcc
       ;;
   esac
 
@@ -184,11 +193,11 @@ for target in $target_list; do
   case $target in
     *-linux-user | *-bsd-user)
       echo "CONFIG_USER_ONLY=y" >> $config_target_mak
-      echo "QEMU=\$(BUILD_DIR)/$target/qemu-$arch" >> $config_target_mak
+      echo "QEMU=$PWD/qemu-$arch" >> $config_target_mak
       ;;
     *-softmmu)
       echo "CONFIG_SOFTMMU=y" >> $config_target_mak
-      echo "QEMU=\$(BUILD_DIR)/$target/qemu-system-$arch" >> $config_target_mak
+      echo "QEMU=$PWD/qemu-system-$arch" >> $config_target_mak
       ;;
   esac
 
@@ -230,6 +239,10 @@ for target in $target_list; do
             if do_compiler "$target_compiler" $target_compiler_cflags \
                -march=armv8.3-a -o $TMPE $TMPC; then
                 echo "CROSS_CC_HAS_ARMV8_3=y" >> $config_target_mak
+            fi
+            if do_compiler "$target_compiler" $target_compiler_cflags \
+               -mbranch-protection=standard -o $TMPE $TMPC; then
+                echo "CROSS_CC_HAS_ARMV8_BTI=y" >> $config_target_mak
             fi
         ;;
     esac

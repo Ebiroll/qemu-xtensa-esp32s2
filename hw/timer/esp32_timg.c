@@ -618,7 +618,7 @@ static void esp32_timg_init(Object *obj)
                         NULL,
                         esp32_timg_set_apb_freq,
                         NULL,
-                        obj, &error_abort);
+                        obj);
 
     s->rtc_slow_freq_hz = 150000;
     s->xtal_freq_hz = 40000000;

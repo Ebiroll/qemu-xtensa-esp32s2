@@ -42,12 +42,6 @@ static uint64_t esp32_rtc_cntl_read(void *opaque, hwaddr addr, unsigned int size
         r = s->time_reg >> 32;
         break;
 
-    case 0x38:
-         printf("read RTC_CNTL_RESET_STATE_REG\n");
-         //r=0x12;
-         r=0x3041; // Poweron
-        break;         
-
     case A_RTC_CNTL_RESET_STATE:
         r = FIELD_DP32(r, RTC_CNTL_RESET_STATE, RESET_CAUSE_PROCPU, s->reset_cause[0]);
         r = FIELD_DP32(r, RTC_CNTL_RESET_STATE, RESET_CAUSE_APPCPU, s->reset_cause[1]);
@@ -134,17 +128,7 @@ static void esp32_rtc_cntl_write(void *opaque, hwaddr addr, uint64_t value,
         s->soc_clk = FIELD_EX32(value, RTC_CNTL_CLK_CONF, SOC_CLK_SEL);
         s->rtc_fastclk = FIELD_EX32(value, RTC_CNTL_CLK_CONF, FAST_CLK_RTC_SEL);
         s->rtc_slowclk = FIELD_EX32(value, RTC_CNTL_CLK_CONF, ANA_CLK_RTC_SEL);
-        if (s->rtc_slowclk<3 && s->rtc_fastclk<2) {
-            esp32_rtc_update_clk(s);
-        }
-        else
-        {
-            printf("A_RTC_CNTL_CLK_CONF slow(%d),fast(%d)",s->rtc_slowclk<3,s->rtc_fastclk);
-            s->rtc_slowclk=0;
-            s->rtc_fastclk=1;
-            esp32_rtc_update_clk(s);
-        }
-        
+        esp32_rtc_update_clk(s);
         break;
 
     case A_RTC_CNTL_SW_CPU_STALL:

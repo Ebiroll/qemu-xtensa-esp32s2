@@ -54,7 +54,6 @@
 
 #include "qemu/osdep.h"
 #include "qemu/log.h"
-#include "hw/hw.h"
 #include "hw/sysbus.h"
 #include "migration/vmstate.h"
 #include "qemu/timer.h"
@@ -62,8 +61,8 @@
 #include "hw/ptimer.h"
 
 #include "hw/arm/exynos4210.h"
-#include "hw/hw.h"
 #include "hw/irq.h"
+#include "qom/object.h"
 
 //#define DEBUG_MCT
 
@@ -244,10 +243,9 @@ typedef struct {
 } Exynos4210MCTLT;
 
 #define TYPE_EXYNOS4210_MCT "exynos4210.mct"
-#define EXYNOS4210_MCT(obj) \
-    OBJECT_CHECK(Exynos4210MCTState, (obj), TYPE_EXYNOS4210_MCT)
+OBJECT_DECLARE_SIMPLE_TYPE(Exynos4210MCTState, EXYNOS4210_MCT)
 
-typedef struct Exynos4210MCTState {
+struct Exynos4210MCTState {
     SysBusDevice parent_obj;
 
     MemoryRegion iomem;
@@ -259,7 +257,7 @@ typedef struct Exynos4210MCTState {
     Exynos4210MCTGT g_timer;
 
     uint32_t    freq;                   /* all timers tick frequency, TCLK */
-} Exynos4210MCTState;
+};
 
 /*** VMState ***/
 static const VMStateDescription vmstate_tick_timer = {
@@ -539,7 +537,7 @@ static void exynos4210_gcomp_raise_irq(void *opaque, uint32_t id)
     /* If CSTAT is pending and IRQ is enabled */
     if ((s->reg.int_cstat & G_INT_CSTAT_COMP(id)) &&
             (s->reg.int_enb & G_INT_ENABLE(id))) {
-        DPRINTF("gcmp timer[%d] IRQ\n", id);
+        DPRINTF("gcmp timer[%u] IRQ\n", id);
         qemu_irq_raise(s->irq[id]);
     }
 }
@@ -1005,7 +1003,7 @@ static void exynos4210_mct_update_freq(Exynos4210MCTState *s)
                     MCT_CFG_GET_DIVIDER(s->reg_mct_cfg));
 
     if (freq != s->freq) {
-        DPRINTF("freq=%dHz\n", s->freq);
+        DPRINTF("freq=%uHz\n", s->freq);
 
         /* global timer */
         tx_ptimer_set_freq(s->g_timer.ptimer_frc, s->freq);
@@ -1062,7 +1060,7 @@ static uint64_t exynos4210_mct_read(void *opaque, hwaddr offset,
     int index;
     int shift;
     uint64_t count;
-    uint32_t value;
+    uint32_t value = 0;
     int lt_i;
 
     switch (offset) {
@@ -1158,8 +1156,8 @@ static uint64_t exynos4210_mct_read(void *opaque, hwaddr offset,
         break;
 
     default:
-        hw_error("exynos4210.mct: bad read offset "
-                TARGET_FMT_plx "\n", offset);
+        qemu_log_mask(LOG_GUEST_ERROR, "%s: Bad offset 0x%" HWADDR_PRIX "\n",
+                      __func__, offset);
         break;
     }
     return value;
@@ -1367,7 +1365,6 @@ static void exynos4210_mct_write(void *opaque, hwaddr offset,
 
     case L0_TCNTB: case L1_TCNTB:
         lt_i = GET_L_TIMER_IDX(offset);
-        index = GET_L_TIMER_CNT_REG_IDX(offset, lt_i);
 
         /*
          * TCNTB is updated to internal register only after CNT expired.
@@ -1396,7 +1393,6 @@ static void exynos4210_mct_write(void *opaque, hwaddr offset,
 
     case L0_ICNTB: case L1_ICNTB:
         lt_i = GET_L_TIMER_IDX(offset);
-        index = GET_L_TIMER_CNT_REG_IDX(offset, lt_i);
 
         s->l_timer[lt_i].reg.wstat |= L_WSTAT_ICNTB_WRITE;
         s->l_timer[lt_i].reg.cnt[L_REG_CNT_ICNTB] = value &
@@ -1438,8 +1434,6 @@ static void exynos4210_mct_write(void *opaque, hwaddr offset,
 
     case L0_FRCNTB: case L1_FRCNTB:
         lt_i = GET_L_TIMER_IDX(offset);
-        index = GET_L_TIMER_CNT_REG_IDX(offset, lt_i);
-
         DPRINTF("local timer[%d] FRCNTB write %llx\n", lt_i, value);
 
         s->l_timer[lt_i].reg.wstat |= L_WSTAT_FRCCNTB_WRITE;
@@ -1488,8 +1482,8 @@ static void exynos4210_mct_write(void *opaque, hwaddr offset,
         break;
 
     default:
-        hw_error("exynos4210.mct: bad write offset "
-                TARGET_FMT_plx "\n", offset);
+        qemu_log_mask(LOG_GUEST_ERROR, "%s: Bad offset 0x%" HWADDR_PRIX "\n",
+                      __func__, offset);
         break;
     }
 }

@@ -30,6 +30,7 @@
 
 #include "hw/arm/exynos4210.h"
 #include "hw/irq.h"
+#include "qom/object.h"
 
 //#define DEBUG_PWM
 
@@ -102,10 +103,9 @@ typedef struct {
 } Exynos4210PWM;
 
 #define TYPE_EXYNOS4210_PWM "exynos4210.pwm"
-#define EXYNOS4210_PWM(obj) \
-    OBJECT_CHECK(Exynos4210PWMState, (obj), TYPE_EXYNOS4210_PWM)
+OBJECT_DECLARE_SIMPLE_TYPE(Exynos4210PWMState, EXYNOS4210_PWM)
 
-typedef struct Exynos4210PWMState {
+struct Exynos4210PWMState {
     SysBusDevice parent_obj;
 
     MemoryRegion iomem;
@@ -116,7 +116,7 @@ typedef struct Exynos4210PWMState {
 
     Exynos4210PWM timer[EXYNOS4210_PWM_TIMERS_NUM];
 
-} Exynos4210PWMState;
+};
 
 /*** VMState ***/
 static const VMStateDescription vmstate_exynos4210_pwm = {
@@ -169,7 +169,7 @@ static void exynos4210_pwm_update_freq(Exynos4210PWMState *s, uint32_t id)
 
     if (freq != s->timer[id].freq) {
         ptimer_set_freq(s->timer[id].ptimer, s->timer[id].freq);
-        DPRINTF("freq=%dHz\n", s->timer[id].freq);
+        DPRINTF("freq=%uHz\n", s->timer[id].freq);
     }
 }
 
@@ -183,14 +183,14 @@ static void exynos4210_pwm_tick(void *opaque)
     uint32_t id = s->id;
     bool cmp;
 
-    DPRINTF("timer %d tick\n", id);
+    DPRINTF("timer %u tick\n", id);
 
     /* set irq status */
     p->reg_tint_cstat |= TINT_CSTAT_STATUS(id);
 
     /* raise IRQ */
     if (p->reg_tint_cstat & TINT_CSTAT_ENABLE(id)) {
-        DPRINTF("timer %d IRQ\n", id);
+        DPRINTF("timer %u IRQ\n", id);
         qemu_irq_raise(p->timer[id].irq);
     }
 
@@ -202,7 +202,7 @@ static void exynos4210_pwm_tick(void *opaque)
     }
 
     if (cmp) {
-        DPRINTF("auto reload timer %d count to %x\n", id,
+        DPRINTF("auto reload timer %u count to %x\n", id,
                 p->timer[id].reg_tcntb);
         ptimer_set_count(p->timer[id].ptimer, p->timer[id].reg_tcntb);
         ptimer_run(p->timer[id].ptimer, 1);

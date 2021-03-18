@@ -140,6 +140,27 @@ static uint16_t bytes_to_blocks(uint32_t bytes)
     return bytes >> BLOCK_SHIFT;
 }
 
+static uint32_t blocks_to_bytes(uint16_t blocks)
+{
+    return blocks << BLOCK_SHIFT;
+}
+
+static int hiomap_erase(PnvPnor *pnor, uint32_t offset, uint32_t size)
+{
+    MemTxResult result;
+    int i;
+
+    for (i = 0; i < size / 4; i++) {
+        result = memory_region_dispatch_write(&pnor->mmio, offset + i * 4,
+                                              0xFFFFFFFF, MO_32,
+                                              MEMTXATTRS_UNSPECIFIED);
+        if (result != MEMTX_OK) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
 static void hiomap_cmd(IPMIBmcSim *ibs, uint8_t *cmd, unsigned int cmd_len,
                        RspBuffer *rsp)
 {
@@ -155,8 +176,14 @@ static void hiomap_cmd(IPMIBmcSim *ibs, uint8_t *cmd, unsigned int cmd_len,
     switch (cmd[2]) {
     case HIOMAP_C_MARK_DIRTY:
     case HIOMAP_C_FLUSH:
-    case HIOMAP_C_ERASE:
     case HIOMAP_C_ACK:
+        break;
+
+    case HIOMAP_C_ERASE:
+        if (hiomap_erase(pnor, blocks_to_bytes(cmd[5] << 8 | cmd[4]),
+                        blocks_to_bytes(cmd[7] << 8 | cmd[6]))) {
+            rsp_buffer_set_error(rsp, IPMI_CC_UNSPECIFIED);
+        }
         break;
 
     case HIOMAP_C_GET_INFO:
@@ -217,8 +244,7 @@ static const IPMINetfn hiomap_netfn = {
 void pnv_bmc_set_pnor(IPMIBmc *bmc, PnvPnor *pnor)
 {
     object_ref(OBJECT(pnor));
-    object_property_add_const_link(OBJECT(bmc), "pnor", OBJECT(pnor),
-                                   &error_abort);
+    object_property_add_const_link(OBJECT(bmc), "pnor", OBJECT(pnor));
 
     /* Install the HIOMAP protocol handlers to access the PNOR */
     ipmi_sim_register_netfn(IPMI_BMC_SIMULATOR(bmc), IPMI_NETFN_OEM,
@@ -235,8 +261,8 @@ IPMIBmc *pnv_bmc_create(PnvPnor *pnor)
 
     obj = object_new(TYPE_IPMI_BMC_SIMULATOR);
     object_ref(OBJECT(pnor));
-    object_property_add_const_link(obj, "pnor", OBJECT(pnor), &error_abort);
-    object_property_set_bool(obj, true, "realized", &error_fatal);
+    object_property_add_const_link(obj, "pnor", OBJECT(pnor));
+    qdev_realize(DEVICE(obj), NULL, &error_fatal);
 
     /* Install the HIOMAP protocol handlers to access the PNOR */
     ipmi_sim_register_netfn(IPMI_BMC_SIMULATOR(obj), IPMI_NETFN_OEM,

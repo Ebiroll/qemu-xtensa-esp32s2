@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -30,6 +30,7 @@
 #include "hw/mips/cps.h"
 #include "hw/mips/cpudevs.h"
 #include "hw/pci-host/xilinx-pcie.h"
+#include "hw/qdev-clock.h"
 #include "hw/qdev-properties.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
@@ -41,16 +42,20 @@
 #include "sysemu/runstate.h"
 
 #include <libfdt.h>
+#include "qom/object.h"
 
-#define TYPE_MIPS_BOSTON "mips-boston"
-#define BOSTON(obj) OBJECT_CHECK(BostonState, (obj), TYPE_MIPS_BOSTON)
+#define TYPE_BOSTON "mips-boston"
+typedef struct BostonState BostonState;
+DECLARE_INSTANCE_CHECKER(BostonState, BOSTON,
+                         TYPE_BOSTON)
 
-typedef struct {
+struct BostonState {
     SysBusDevice parent_obj;
 
     MachineState *mach;
     MIPSCPSState cps;
     SerialMM *uart;
+    Clock *cpuclk;
 
     CharBackend lcd_display;
     char lcd_content[8];
@@ -58,7 +63,7 @@ typedef struct {
 
     hwaddr kernel_entry;
     hwaddr fdt_base;
-} BostonState;
+};
 
 enum boston_plat_reg {
     PLAT_FPGA_BUILD     = 0x00,
@@ -248,10 +253,19 @@ static const MemoryRegionOps boston_platreg_ops = {
     .endianness = DEVICE_NATIVE_ENDIAN,
 };
 
+static void mips_boston_instance_init(Object *obj)
+{
+    BostonState *s = BOSTON(obj);
+
+    s->cpuclk = qdev_init_clock_out(DEVICE(obj), "cpu-refclk");
+    clock_set_hz(s->cpuclk, 1000000000); /* 1 GHz */
+}
+
 static const TypeInfo boston_device = {
-    .name          = TYPE_MIPS_BOSTON,
+    .name          = TYPE_BOSTON,
     .parent        = TYPE_SYS_BUS_DEVICE,
     .instance_size = sizeof(BostonState),
+    .instance_init = mips_boston_instance_init,
 };
 
 static void boston_register_types(void)
@@ -335,11 +349,9 @@ static const void *boston_fdt_filter(void *opaque, const void *fdt_orig,
     MachineState *machine = s->mach;
     const char *cmdline;
     int err;
-    void *fdt;
-    size_t fdt_sz, ram_low_sz, ram_high_sz;
-
-    fdt_sz = fdt_totalsize(fdt_orig) * 2;
-    fdt = g_malloc0(fdt_sz);
+    size_t ram_low_sz, ram_high_sz;
+    size_t fdt_sz = fdt_totalsize(fdt_orig) * 2;
+    g_autofree void *fdt = g_malloc0(fdt_sz);
 
     err = fdt_open_into(fdt_orig, fdt, fdt_sz);
     if (err) {
@@ -366,7 +378,7 @@ static const void *boston_fdt_filter(void *opaque, const void *fdt_orig,
 
     s->fdt_base = *load_addr;
 
-    return fdt;
+    return g_steal_pointer(&fdt);
 }
 
 static const void *boston_kernel_filter(void *opaque, const void *kernel,
@@ -400,7 +412,7 @@ xilinx_pcie_init(MemoryRegion *sys_mem, uint32_t bus_nr,
     DeviceState *dev;
     MemoryRegion *cfg, *mmio;
 
-    dev = qdev_create(NULL, TYPE_XILINX_PCIE_HOST);
+    dev = qdev_new(TYPE_XILINX_PCIE_HOST);
 
     qdev_prop_set_uint32(dev, "bus_nr", bus_nr);
     qdev_prop_set_uint64(dev, "cfg_base", cfg_base);
@@ -409,7 +421,7 @@ xilinx_pcie_init(MemoryRegion *sys_mem, uint32_t bus_nr,
     qdev_prop_set_uint64(dev, "mmio_size", mmio_size);
     qdev_prop_set_bit(dev, "link_up", link_up);
 
-    qdev_init_nofail(dev);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
 
     cfg = sysbus_mmio_get_region(SYS_BUS_DEVICE(dev), 0);
     memory_region_add_subregion_overlap(sys_mem, cfg_base, cfg, 0);
@@ -426,7 +438,6 @@ static void boston_mach_init(MachineState *machine)
 {
     DeviceState *dev;
     BostonState *s;
-    Error *err = NULL;
     MemoryRegion *flash, *ddr_low_alias, *lcd, *platreg;
     MemoryRegion *sys_mem = get_system_memory();
     XilinxPCIEHost *pcie2;
@@ -442,8 +453,8 @@ static void boston_mach_init(MachineState *machine)
         exit(1);
     }
 
-    dev = qdev_create(NULL, TYPE_MIPS_BOSTON);
-    qdev_init_nofail(dev);
+    dev = qdev_new(TYPE_BOSTON);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
 
     s = BOSTON(dev);
     s->mach = machine;
@@ -455,22 +466,20 @@ static void boston_mach_init(MachineState *machine)
 
     is_64b = cpu_supports_isa(machine->cpu_type, ISA_MIPS64);
 
-    sysbus_init_child_obj(OBJECT(machine), "cps", OBJECT(&s->cps),
-                          sizeof(s->cps), TYPE_MIPS_CPS);
-    object_property_set_str(OBJECT(&s->cps), machine->cpu_type, "cpu-type",
-                            &err);
-    object_property_set_int(OBJECT(&s->cps), machine->smp.cpus, "num-vp", &err);
-    object_property_set_bool(OBJECT(&s->cps), true, "realized", &err);
-
-    if (err != NULL) {
-        error_report("%s", error_get_pretty(err));
-        exit(1);
-    }
+    object_initialize_child(OBJECT(machine), "cps", &s->cps, TYPE_MIPS_CPS);
+    object_property_set_str(OBJECT(&s->cps), "cpu-type", machine->cpu_type,
+                            &error_fatal);
+    object_property_set_int(OBJECT(&s->cps), "num-vp", machine->smp.cpus,
+                            &error_fatal);
+    qdev_connect_clock_in(DEVICE(&s->cps), "clk-in",
+                          qdev_get_clock_out(dev, "cpu-refclk"));
+    sysbus_realize(SYS_BUS_DEVICE(&s->cps), &error_fatal);
 
     sysbus_mmio_map_overlap(SYS_BUS_DEVICE(&s->cps), 0, 0, 1);
 
     flash =  g_new(MemoryRegion, 1);
-    memory_region_init_rom(flash, NULL, "boston.flash", 128 * MiB, &err);
+    memory_region_init_rom(flash, NULL, "boston.flash", 128 * MiB,
+                           &error_fatal);
     memory_region_add_subregion_overlap(sys_mem, 0x18000000, flash, 0);
 
     memory_region_add_subregion_overlap(sys_mem, 0x80000000, machine->ram, 0);

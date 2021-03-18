@@ -32,6 +32,7 @@
 #include "qemu/module.h"
 #include "qemu/timer.h"
 #include "qapi/error.h"
+#include "qom/object.h"
 
 /*
   Missing features:
@@ -62,9 +63,11 @@ static struct {
 #define CS_DREGS 32
 
 #define TYPE_CS4231A "cs4231a"
-#define CS4231A(obj) OBJECT_CHECK (CSState, (obj), TYPE_CS4231A)
+typedef struct CSState CSState;
+DECLARE_INSTANCE_CHECKER(CSState, CS4231A,
+                         TYPE_CS4231A)
 
-typedef struct CSState {
+struct CSState {
     ISADevice dev;
     QEMUSoundCard card;
     MemoryRegion ioports;
@@ -82,7 +85,7 @@ typedef struct CSState {
     int aci_counter;
     SWVoiceOut *voice;
     int16_t *tab;
-} CSState;
+};
 
 #define MODE2 (1 << 6)
 #define MCE (1 << 6)
@@ -683,12 +686,6 @@ static void cs4231a_realizefn (DeviceState *dev, Error **errp)
     AUD_register_card ("cs4231a", &s->card);
 }
 
-static int cs4231a_init (ISABus *bus)
-{
-    isa_create_simple (bus, TYPE_CS4231A);
-    return 0;
-}
-
 static Property cs4231a_properties[] = {
     DEFINE_AUDIO_PROPERTIES(CSState, card),
     DEFINE_PROP_UINT32 ("iobase",  CSState, port, 0x534),
@@ -720,7 +717,7 @@ static const TypeInfo cs4231a_info = {
 static void cs4231a_register_types (void)
 {
     type_register_static (&cs4231a_info);
-    isa_register_soundhw("cs4231a", "CS4231A", cs4231a_init);
+    deprecated_register_soundhw("cs4231a", "CS4231A", 1, TYPE_CS4231A);
 }
 
 type_init (cs4231a_register_types)

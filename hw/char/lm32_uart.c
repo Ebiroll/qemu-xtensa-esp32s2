@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -31,6 +31,7 @@
 #include "chardev/char-fe.h"
 #include "qemu/error-report.h"
 #include "qemu/module.h"
+#include "qom/object.h"
 
 enum {
     R_RXTX = 0,
@@ -94,7 +95,7 @@ enum {
 };
 
 #define TYPE_LM32_UART "lm32-uart"
-#define LM32_UART(obj) OBJECT_CHECK(LM32UartState, (obj), TYPE_LM32_UART)
+OBJECT_DECLARE_SIMPLE_TYPE(LM32UartState, LM32_UART)
 
 struct LM32UartState {
     SysBusDevice parent_obj;
@@ -105,7 +106,6 @@ struct LM32UartState {
 
     uint32_t regs[R_MAX];
 };
-typedef struct LM32UartState LM32UartState;
 
 static void uart_update_irq(LM32UartState *s)
 {

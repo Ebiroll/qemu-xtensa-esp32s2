@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -365,11 +365,11 @@ SpaprTceTable *spapr_tce_new_table(DeviceState *owner, uint32_t liobn)
     tcet->liobn = liobn;
 
     tmp = g_strdup_printf("tce-table-%x", liobn);
-    object_property_add_child(OBJECT(owner), tmp, OBJECT(tcet), NULL);
+    object_property_add_child(OBJECT(owner), tmp, OBJECT(tcet));
     g_free(tmp);
     object_unref(OBJECT(tcet));
 
-    object_property_set_bool(OBJECT(tcet), true, "realized", NULL);
+    qdev_realize(DEVICE(tcet), NULL, NULL);
 
     return tcet;
 }
@@ -416,7 +416,7 @@ void spapr_tce_table_disable(SpaprTceTable *tcet)
     tcet->nb_table = 0;
 }
 
-static void spapr_tce_table_unrealize(DeviceState *dev, Error **errp)
+static void spapr_tce_table_unrealize(DeviceState *dev)
 {
     SpaprTceTable *tcet = SPAPR_TCE_TABLE(dev);
 

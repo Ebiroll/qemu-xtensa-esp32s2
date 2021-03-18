@@ -458,9 +458,8 @@ static VncServerInfo2List *qmp_query_server_entry(QIOChannelSocket *ioc,
     Error *err = NULL;
     SocketAddress *addr;
 
-    addr = qio_channel_socket_get_local_address(ioc, &err);
+    addr = qio_channel_socket_get_local_address(ioc, NULL);
     if (!addr) {
-        error_free(err);
         return prev;
     }
 
@@ -569,7 +568,7 @@ VncInfo2List *qmp_query_vnc_servers(Error **errp)
                        &info->vencrypt, &info->has_vencrypt);
         if (vd->dcl.con) {
             dev = DEVICE(object_property_get_link(OBJECT(vd->dcl.con),
-                                                  "device", NULL));
+                                                  "device", &error_abort));
             info->has_display = true;
             info->display = g_strdup(dev->id);
         }
@@ -1177,7 +1176,7 @@ static void audio_capture_destroy(void *opaque)
 {
 }
 
-static void audio_capture(void *opaque, void *buf, int size)
+static void audio_capture(void *opaque, const void *buf, int size)
 {
     VncState *vs = opaque;
 
@@ -1399,7 +1398,8 @@ static size_t vnc_client_write_plain(VncState *vs)
             g_source_remove(vs->ioc_tag);
         }
         vs->ioc_tag = qio_channel_add_watch(
-            vs->ioc, G_IO_IN, vnc_client_io, vs, NULL);
+            vs->ioc, G_IO_IN | G_IO_HUP | G_IO_ERR,
+            vnc_client_io, vs, NULL);
     }
 
     return ret;
@@ -1436,7 +1436,8 @@ static void vnc_client_write(VncState *vs)
             g_source_remove(vs->ioc_tag);
         }
         vs->ioc_tag = qio_channel_add_watch(
-            vs->ioc, G_IO_IN, vnc_client_io, vs, NULL);
+            vs->ioc, G_IO_IN | G_IO_HUP | G_IO_ERR,
+            vnc_client_io, vs, NULL);
     }
     vnc_unlock_output(vs);
 }
@@ -1552,6 +1553,12 @@ gboolean vnc_client_io(QIOChannel *ioc G_GNUC_UNUSED,
     VncState *vs = opaque;
 
     assert(vs->magic == VNC_MAGIC);
+
+    if (condition & (G_IO_HUP | G_IO_ERR)) {
+        vnc_disconnect_start(vs);
+        return TRUE;
+    }
+
     if (condition & G_IO_IN) {
         if (vnc_client_read(vs) < 0) {
             /* vs is free()ed here */
@@ -1613,7 +1620,8 @@ void vnc_write(VncState *vs, const void *data, size_t len)
             g_source_remove(vs->ioc_tag);
         }
         vs->ioc_tag = qio_channel_add_watch(
-            vs->ioc, G_IO_IN | G_IO_OUT, vnc_client_io, vs, NULL);
+            vs->ioc, G_IO_IN | G_IO_HUP | G_IO_ERR | G_IO_OUT,
+            vnc_client_io, vs, NULL);
     }
 
     buffer_append(&vs->output, data, len);
@@ -3078,14 +3086,17 @@ static void vnc_connect(VncDisplay *vd, QIOChannelSocket *sioc,
         vs->websocket = 1;
         if (vd->tlscreds) {
             vs->ioc_tag = qio_channel_add_watch(
-                vs->ioc, G_IO_IN, vncws_tls_handshake_io, vs, NULL);
+                vs->ioc, G_IO_IN | G_IO_HUP | G_IO_ERR,
+                vncws_tls_handshake_io, vs, NULL);
         } else {
             vs->ioc_tag = qio_channel_add_watch(
-                vs->ioc, G_IO_IN, vncws_handshake_io, vs, NULL);
+                vs->ioc, G_IO_IN | G_IO_HUP | G_IO_ERR,
+                vncws_handshake_io, vs, NULL);
         }
     } else {
         vs->ioc_tag = qio_channel_add_watch(
-            vs->ioc, G_IO_IN, vnc_client_io, vs, NULL);
+            vs->ioc, G_IO_IN | G_IO_HUP | G_IO_ERR,
+            vnc_client_io, vs, NULL);
     }
 
     vnc_client_cache_addr(vs);
@@ -3275,13 +3286,12 @@ int vnc_display_pw_expire(const char *id, time_t expires)
 static void vnc_display_print_local_addr(VncDisplay *vd)
 {
     SocketAddress *addr;
-    Error *err = NULL;
 
     if (!vd->listener || !vd->listener->nsioc) {
         return;
     }
 
-    addr = qio_channel_socket_get_local_address(vd->listener->sioc[0], &err);
+    addr = qio_channel_socket_get_local_address(vd->listener->sioc[0], NULL);
     if (!addr) {
         return;
     }

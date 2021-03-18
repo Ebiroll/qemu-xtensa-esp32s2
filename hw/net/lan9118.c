@@ -20,10 +20,12 @@
 #include "hw/net/lan9118.h"
 #include "hw/ptimer.h"
 #include "hw/qdev-properties.h"
+#include "qapi/error.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
 /* For crc32 */
 #include <zlib.h>
+#include "qom/object.h"
 
 //#define DEBUG_LAN9118
 
@@ -179,9 +181,9 @@ static const VMStateDescription vmstate_lan9118_packet = {
     }
 };
 
-#define LAN9118(obj) OBJECT_CHECK(lan9118_state, (obj), TYPE_LAN9118)
+OBJECT_DECLARE_SIMPLE_TYPE(lan9118_state, LAN9118)
 
-typedef struct {
+struct lan9118_state {
     SysBusDevice parent_obj;
 
     NICState *nic;
@@ -257,7 +259,7 @@ typedef struct {
     uint32_t read_long;
 
     uint32_t mode_16bit;
-} lan9118_state;
+};
 
 static const VMStateDescription vmstate_lan9118 = {
     .name = "lan9118",
@@ -930,10 +932,8 @@ static uint32_t do_mac_read(lan9118_state *s, int reg)
                | (s->conf.macaddr.a[2] << 16) | (s->conf.macaddr.a[3] << 24);
     case MAC_HASHH:
         return s->mac_hashh;
-        break;
     case MAC_HASHL:
         return s->mac_hashl;
-        break;
     case MAC_MII_ACC:
         return s->mac_mii_acc;
     case MAC_MII_DATA:
@@ -1394,10 +1394,10 @@ void lan9118_init(NICInfo *nd, uint32_t base, qemu_irq irq)
     SysBusDevice *s;
 
     qemu_check_nic_model(nd, "lan9118");
-    dev = qdev_create(NULL, TYPE_LAN9118);
+    dev = qdev_new(TYPE_LAN9118);
     qdev_set_nic_properties(dev, nd);
-    qdev_init_nofail(dev);
     s = SYS_BUS_DEVICE(dev);
+    sysbus_realize_and_unref(s, &error_fatal);
     sysbus_mmio_map(s, 0, base);
     sysbus_connect_irq(s, 0, irq);
 }

@@ -46,11 +46,13 @@
 #include "hw/nvram/chrp_nvram.h"
 #include "hw/nvram/fw_cfg.h"
 #include "hw/char/escc.h"
-#include "hw/empty_slot.h"
+#include "hw/misc/empty_slot.h"
+#include "hw/misc/unimp.h"
 #include "hw/irq.h"
 #include "hw/loader.h"
 #include "elf.h"
 #include "trace.h"
+#include "qom/object.h"
 
 /*
  * Sun4m architecture was used in the following machines:
@@ -142,7 +144,7 @@ static void nvram_init(Nvram *nvram, uint8_t *macaddr,
     memset(image, '\0', sizeof(image));
 
     /* OpenBIOS nvram variables partition */
-    sysp_end = chrp_nvram_create_system_partition(image, 0);
+    sysp_end = chrp_nvram_create_system_partition(image, 0, 0x1fd0);
 
     /* Free space partition */
     chrp_nvram_create_free_partition(&image[sysp_end], 0x1fd0 - sysp_end);
@@ -217,22 +219,12 @@ static void dummy_cpu_set_irq(void *opaque, int irq, int level)
 {
 }
 
-static void main_cpu_reset(void *opaque)
+static void sun4m_cpu_reset(void *opaque)
 {
     SPARCCPU *cpu = opaque;
     CPUState *cs = CPU(cpu);
 
     cpu_reset(cs);
-    cs->halted = 0;
-}
-
-static void secondary_cpu_reset(void *opaque)
-{
-    SPARCCPU *cpu = opaque;
-    CPUState *cs = CPU(cpu);
-
-    cpu_reset(cs);
-    cs->halted = 1;
 }
 
 static void cpu_halt_signal(void *opaque, int irq, int level)
@@ -315,10 +307,10 @@ static void *iommu_init(hwaddr addr, uint32_t version, qemu_irq irq)
     DeviceState *dev;
     SysBusDevice *s;
 
-    dev = qdev_create(NULL, TYPE_SUN4M_IOMMU);
+    dev = qdev_new(TYPE_SUN4M_IOMMU);
     qdev_prop_set_uint32(dev, "version", version);
-    qdev_init_nofail(dev);
     s = SYS_BUS_DEVICE(dev);
+    sysbus_realize_and_unref(s, &error_fatal);
     sysbus_connect_irq(s, 0, irq);
     sysbus_mmio_map(s, 0, addr);
 
@@ -327,7 +319,7 @@ static void *iommu_init(hwaddr addr, uint32_t version, qemu_irq irq)
 
 static void *sparc32_dma_init(hwaddr dma_base,
                               hwaddr esp_base, qemu_irq espdma_irq,
-                              hwaddr le_base, qemu_irq ledma_irq)
+                              hwaddr le_base, qemu_irq ledma_irq, NICInfo *nd)
 {
     DeviceState *dma;
     ESPDMADeviceState *espdma;
@@ -335,17 +327,12 @@ static void *sparc32_dma_init(hwaddr dma_base,
     SysBusESPState *esp;
     SysBusPCNetState *lance;
 
-    dma = qdev_create(NULL, TYPE_SPARC32_DMA);
-    qdev_init_nofail(dma);
-    sysbus_mmio_map(SYS_BUS_DEVICE(dma), 0, dma_base);
-
+    dma = qdev_new(TYPE_SPARC32_DMA);
     espdma = SPARC32_ESPDMA_DEVICE(object_resolve_path_component(
                                    OBJECT(dma), "espdma"));
     sysbus_connect_irq(SYS_BUS_DEVICE(espdma), 0, espdma_irq);
 
-    esp = ESP_STATE(object_resolve_path_component(OBJECT(espdma), "esp"));
-    sysbus_mmio_map(SYS_BUS_DEVICE(esp), 0, esp_base);
-    scsi_bus_legacy_handle_cmdline(&esp->esp.bus);
+    esp = ESP(object_resolve_path_component(OBJECT(espdma), "esp"));
 
     ledma = SPARC32_LEDMA_DEVICE(object_resolve_path_component(
                                  OBJECT(dma), "ledma"));
@@ -353,6 +340,14 @@ static void *sparc32_dma_init(hwaddr dma_base,
 
     lance = SYSBUS_PCNET(object_resolve_path_component(
                          OBJECT(ledma), "lance"));
+    qdev_set_nic_properties(DEVICE(lance), nd);
+
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dma), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(dma), 0, dma_base);
+
+    sysbus_mmio_map(SYS_BUS_DEVICE(esp), 0, esp_base);
+    scsi_bus_legacy_handle_cmdline(&esp->esp.bus);
+
     sysbus_mmio_map(SYS_BUS_DEVICE(lance), 0, le_base);
 
     return dma;
@@ -366,10 +361,10 @@ static DeviceState *slavio_intctl_init(hwaddr addr,
     SysBusDevice *s;
     unsigned int i, j;
 
-    dev = qdev_create(NULL, "slavio_intctl");
-    qdev_init_nofail(dev);
+    dev = qdev_new("slavio_intctl");
 
     s = SYS_BUS_DEVICE(dev);
+    sysbus_realize_and_unref(s, &error_fatal);
 
     for (i = 0; i < MAX_CPUS; i++) {
         for (j = 0; j < MAX_PILS; j++) {
@@ -394,10 +389,10 @@ static void slavio_timer_init_all(hwaddr addr, qemu_irq master_irq,
     SysBusDevice *s;
     unsigned int i;
 
-    dev = qdev_create(NULL, "slavio_timer");
+    dev = qdev_new("slavio_timer");
     qdev_prop_set_uint32(dev, "num_cpus", num_cpus);
-    qdev_init_nofail(dev);
     s = SYS_BUS_DEVICE(dev);
+    sysbus_realize_and_unref(s, &error_fatal);
     sysbus_connect_irq(s, 0, master_irq);
     sysbus_mmio_map(s, 0, addr + SYS_TIMER_OFFSET);
 
@@ -432,9 +427,9 @@ static void slavio_misc_init(hwaddr base,
     DeviceState *dev;
     SysBusDevice *s;
 
-    dev = qdev_create(NULL, "slavio_misc");
-    qdev_init_nofail(dev);
+    dev = qdev_new("slavio_misc");
     s = SYS_BUS_DEVICE(dev);
+    sysbus_realize_and_unref(s, &error_fatal);
     if (base) {
         /* 8 bit registers */
         /* Slavio control */
@@ -469,10 +464,10 @@ static void ecc_init(hwaddr base, qemu_irq irq, uint32_t version)
     DeviceState *dev;
     SysBusDevice *s;
 
-    dev = qdev_create(NULL, "eccmemctl");
+    dev = qdev_new("eccmemctl");
     qdev_prop_set_uint32(dev, "version", version);
-    qdev_init_nofail(dev);
     s = SYS_BUS_DEVICE(dev);
+    sysbus_realize_and_unref(s, &error_fatal);
     sysbus_connect_irq(s, 0, irq);
     sysbus_mmio_map(s, 0, base);
     if (version == 0) { // SS-600MP only
@@ -485,9 +480,9 @@ static void apc_init(hwaddr power_base, qemu_irq cpu_halt)
     DeviceState *dev;
     SysBusDevice *s;
 
-    dev = qdev_create(NULL, "apc");
-    qdev_init_nofail(dev);
+    dev = qdev_new("apc");
     s = SYS_BUS_DEVICE(dev);
+    sysbus_realize_and_unref(s, &error_fatal);
     /* Power management (APC) XXX: not a Slavio device */
     sysbus_mmio_map(s, 0, power_base);
     sysbus_connect_irq(s, 0, cpu_halt);
@@ -499,13 +494,13 @@ static void tcx_init(hwaddr addr, qemu_irq irq, int vram_size, int width,
     DeviceState *dev;
     SysBusDevice *s;
 
-    dev = qdev_create(NULL, "SUNW,tcx");
+    dev = qdev_new("SUNW,tcx");
     qdev_prop_set_uint32(dev, "vram_size", vram_size);
     qdev_prop_set_uint16(dev, "width", width);
     qdev_prop_set_uint16(dev, "height", height);
     qdev_prop_set_uint16(dev, "depth", depth);
-    qdev_init_nofail(dev);
     s = SYS_BUS_DEVICE(dev);
+    sysbus_realize_and_unref(s, &error_fatal);
 
     /* 10/ROM : FCode ROM */
     sysbus_mmio_map(s, 0, addr);
@@ -551,13 +546,13 @@ static void cg3_init(hwaddr addr, qemu_irq irq, int vram_size, int width,
     DeviceState *dev;
     SysBusDevice *s;
 
-    dev = qdev_create(NULL, "cgthree");
+    dev = qdev_new("cgthree");
     qdev_prop_set_uint32(dev, "vram-size", vram_size);
     qdev_prop_set_uint16(dev, "width", width);
     qdev_prop_set_uint16(dev, "height", height);
     qdev_prop_set_uint16(dev, "depth", depth);
-    qdev_init_nofail(dev);
     s = SYS_BUS_DEVICE(dev);
+    sysbus_realize_and_unref(s, &error_fatal);
 
     /* FCode ROM */
     sysbus_mmio_map(s, 0, addr);
@@ -580,9 +575,9 @@ static void idreg_init(hwaddr addr)
     DeviceState *dev;
     SysBusDevice *s;
 
-    dev = qdev_create(NULL, TYPE_MACIO_ID_REGISTER);
-    qdev_init_nofail(dev);
+    dev = qdev_new(TYPE_MACIO_ID_REGISTER);
     s = SYS_BUS_DEVICE(dev);
+    sysbus_realize_and_unref(s, &error_fatal);
 
     sysbus_mmio_map(s, 0, addr);
     address_space_write_rom(&address_space_memory, addr,
@@ -590,14 +585,13 @@ static void idreg_init(hwaddr addr)
                             idreg_data, sizeof(idreg_data));
 }
 
-#define MACIO_ID_REGISTER(obj) \
-    OBJECT_CHECK(IDRegState, (obj), TYPE_MACIO_ID_REGISTER)
+OBJECT_DECLARE_SIMPLE_TYPE(IDRegState, MACIO_ID_REGISTER)
 
-typedef struct IDRegState {
+struct IDRegState {
     SysBusDevice parent_obj;
 
     MemoryRegion mem;
-} IDRegState;
+};
 
 static void idreg_realize(DeviceState *ds, Error **errp)
 {
@@ -632,13 +626,13 @@ static const TypeInfo idreg_info = {
 };
 
 #define TYPE_TCX_AFX "tcx_afx"
-#define TCX_AFX(obj) OBJECT_CHECK(AFXState, (obj), TYPE_TCX_AFX)
+OBJECT_DECLARE_SIMPLE_TYPE(AFXState, TCX_AFX)
 
-typedef struct AFXState {
+struct AFXState {
     SysBusDevice parent_obj;
 
     MemoryRegion mem;
-} AFXState;
+};
 
 /* SS-5 TCX AFX register */
 static void afx_init(hwaddr addr)
@@ -646,9 +640,9 @@ static void afx_init(hwaddr addr)
     DeviceState *dev;
     SysBusDevice *s;
 
-    dev = qdev_create(NULL, TYPE_TCX_AFX);
-    qdev_init_nofail(dev);
+    dev = qdev_new(TYPE_TCX_AFX);
     s = SYS_BUS_DEVICE(dev);
+    sysbus_realize_and_unref(s, &error_fatal);
 
     sysbus_mmio_map(s, 0, addr);
 }
@@ -685,13 +679,15 @@ static const TypeInfo afx_info = {
 };
 
 #define TYPE_OPENPROM "openprom"
-#define OPENPROM(obj) OBJECT_CHECK(PROMState, (obj), TYPE_OPENPROM)
+typedef struct PROMState PROMState;
+DECLARE_INSTANCE_CHECKER(PROMState, OPENPROM,
+                         TYPE_OPENPROM)
 
-typedef struct PROMState {
+struct PROMState {
     SysBusDevice parent_obj;
 
     MemoryRegion prom;
-} PROMState;
+};
 
 /* Boot PROM (OpenBIOS) */
 static uint64_t translate_prom_address(void *opaque, uint64_t addr)
@@ -707,9 +703,9 @@ static void prom_init(hwaddr addr, const char *bios_name)
     char *filename;
     int ret;
 
-    dev = qdev_create(NULL, TYPE_OPENPROM);
-    qdev_init_nofail(dev);
+    dev = qdev_new(TYPE_OPENPROM);
     s = SYS_BUS_DEVICE(dev);
+    sysbus_realize_and_unref(s, &error_fatal);
 
     sysbus_mmio_map(s, 0, addr);
 
@@ -773,12 +769,14 @@ static const TypeInfo prom_info = {
 };
 
 #define TYPE_SUN4M_MEMORY "memory"
-#define SUN4M_RAM(obj) OBJECT_CHECK(RamDevice, (obj), TYPE_SUN4M_MEMORY)
+typedef struct RamDevice RamDevice;
+DECLARE_INSTANCE_CHECKER(RamDevice, SUN4M_RAM,
+                         TYPE_SUN4M_MEMORY)
 
-typedef struct RamDevice {
+struct RamDevice {
     SysBusDevice parent_obj;
     HostMemoryBackend *memdev;
-} RamDevice;
+};
 
 /* System RAM */
 static void ram_realize(DeviceState *dev, Error **errp)
@@ -795,10 +793,9 @@ static void ram_initfn(Object *obj)
     object_property_add_link(obj, "memdev", TYPE_MEMORY_BACKEND,
                              (Object **)&d->memdev,
                              object_property_allow_set_link,
-                             OBJ_PROP_LINK_STRONG, &error_abort);
+                             OBJ_PROP_LINK_STRONG);
     object_property_set_description(obj, "memdev", "Set RAM backend"
-                                    "Valid value is ID of a hostmem backend",
-                                     &error_abort);
+                                    "Valid value is ID of a hostmem backend");
 }
 
 static void ram_class_init(ObjectClass *klass, void *data)
@@ -819,21 +816,17 @@ static const TypeInfo ram_info = {
 static void cpu_devinit(const char *cpu_type, unsigned int id,
                         uint64_t prom_addr, qemu_irq **cpu_irqs)
 {
-    CPUState *cs;
     SPARCCPU *cpu;
     CPUSPARCState *env;
 
-    cpu = SPARC_CPU(cpu_create(cpu_type));
+    cpu = SPARC_CPU(object_new(cpu_type));
     env = &cpu->env;
 
     cpu_sparc_set_id(env, id);
-    if (id == 0) {
-        qemu_register_reset(main_cpu_reset, cpu);
-    } else {
-        qemu_register_reset(secondary_cpu_reset, cpu);
-        cs = CPU(cpu);
-        cs->halted = 1;
-    }
+    qemu_register_reset(sun4m_cpu_reset, cpu);
+    object_property_set_bool(OBJECT(cpu), "start-powered-off", id != 0,
+                             &error_fatal);
+    qdev_realize_and_unref(DEVICE(cpu), NULL, &error_fatal);
     *cpu_irqs = qemu_allocate_irqs(cpu_set_irq, cpu, MAX_PILS);
     env->prom_addr = prom_addr;
 }
@@ -847,7 +840,7 @@ static void sun4m_hw_init(const struct sun4m_hwdef *hwdef,
 {
     DeviceState *slavio_intctl;
     unsigned int i;
-    void *nvram;
+    Nvram *nvram;
     qemu_irq *cpu_irqs[MAX_CPUS], slavio_irq[32], slavio_cpu_irq[MAX_CPUS];
     qemu_irq fdc_tc;
     unsigned long kernel_size;
@@ -860,6 +853,7 @@ static void sun4m_hw_init(const struct sun4m_hwdef *hwdef,
     unsigned int max_cpus = machine->smp.max_cpus;
     Object *ram_memdev = object_resolve_path_type(machine->ram_memdev_id,
                                                   TYPE_MEMORY_BACKEND, NULL);
+    NICInfo *nd = &nd_table[0];
 
     if (machine->ram_size > hwdef->max_mem) {
         error_report("Too much memory for this machine: %" PRId64 ","
@@ -877,14 +871,15 @@ static void sun4m_hw_init(const struct sun4m_hwdef *hwdef,
         cpu_irqs[i] = qemu_allocate_irqs(dummy_cpu_set_irq, NULL, MAX_PILS);
 
     /* Create and map RAM frontend */
-    dev = qdev_create(NULL, "memory");
-    object_property_set_link(OBJECT(dev), ram_memdev, "memdev", &error_fatal);
-    qdev_init_nofail(dev);
+    dev = qdev_new("memory");
+    object_property_set_link(OBJECT(dev), "memdev", ram_memdev, &error_fatal);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, 0);
 
     /* models without ECC don't trap when missing ram is accessed */
     if (!hwdef->ecc_base) {
-        empty_slot_init(machine->ram_size, hwdef->max_mem - machine->ram_size);
+        empty_slot_init("ecc", machine->ram_size,
+                        hwdef->max_mem - machine->ram_size);
     }
 
     prom_init(hwdef->slavio_base, bios_name);
@@ -915,12 +910,14 @@ static void sun4m_hw_init(const struct sun4m_hwdef *hwdef,
            Software shouldn't use aliased addresses, neither should it crash
            when does. Using empty_slot instead of aliasing can help with
            debugging such accesses */
-        empty_slot_init(hwdef->iommu_pad_base,hwdef->iommu_pad_len);
+        empty_slot_init("iommu.alias",
+                        hwdef->iommu_pad_base, hwdef->iommu_pad_len);
     }
 
+    qemu_check_nic_model(nd, TYPE_LANCE);
     sparc32_dma_init(hwdef->dma_base,
                      hwdef->esp_base, slavio_irq[18],
-                     hwdef->le_base, slavio_irq[16]);
+                     hwdef->le_base, slavio_irq[16], nd);
 
     if (graphic_depth != 8 && graphic_depth != 24) {
         error_report("Unsupported depth: %d", graphic_depth);
@@ -964,21 +961,29 @@ static void sun4m_hw_init(const struct sun4m_hwdef *hwdef,
     for (i = 0; i < MAX_VSIMMS; i++) {
         /* vsimm registers probed by OBP */
         if (hwdef->vsimm[i].reg_base) {
-            empty_slot_init(hwdef->vsimm[i].reg_base, 0x2000);
+            char *name = g_strdup_printf("vsimm[%d]", i);
+            empty_slot_init(name, hwdef->vsimm[i].reg_base, 0x2000);
+            g_free(name);
         }
     }
 
     if (hwdef->sx_base) {
-        empty_slot_init(hwdef->sx_base, 0x2000);
+        create_unimplemented_device("SUNW,sx", hwdef->sx_base, 0x2000);
     }
 
-    nvram = m48t59_init(slavio_irq[0], hwdef->nvram_base, 0, 0x2000, 1968, 8);
+    dev = qdev_new("sysbus-m48t08");
+    qdev_prop_set_int32(dev, "base-year", 1968);
+    s = SYS_BUS_DEVICE(dev);
+    sysbus_realize_and_unref(s, &error_fatal);
+    sysbus_connect_irq(s, 0, slavio_irq[0]);
+    sysbus_mmio_map(s, 0, hwdef->nvram_base);
+    nvram = NVRAM(dev);
 
     slavio_timer_init_all(hwdef->counter_base, slavio_irq[19], slavio_cpu_irq, smp_cpus);
 
     /* Slavio TTYA (base+4, Linux ttyS0) is the first QEMU serial device
        Slavio TTYB (base+0, Linux ttyS1) is the second QEMU serial device */
-    dev = qdev_create(NULL, TYPE_ESCC);
+    dev = qdev_new(TYPE_ESCC);
     qdev_prop_set_uint32(dev, "disabled", !machine->enable_graphics);
     qdev_prop_set_uint32(dev, "frequency", ESCC_CLOCK);
     qdev_prop_set_uint32(dev, "it_shift", 1);
@@ -986,13 +991,13 @@ static void sun4m_hw_init(const struct sun4m_hwdef *hwdef,
     qdev_prop_set_chr(dev, "chrA", NULL);
     qdev_prop_set_uint32(dev, "chnBtype", escc_mouse);
     qdev_prop_set_uint32(dev, "chnAtype", escc_kbd);
-    qdev_init_nofail(dev);
     s = SYS_BUS_DEVICE(dev);
+    sysbus_realize_and_unref(s, &error_fatal);
     sysbus_connect_irq(s, 0, slavio_irq[14]);
     sysbus_connect_irq(s, 1, slavio_irq[14]);
     sysbus_mmio_map(s, 0, hwdef->ms_kb_base);
 
-    dev = qdev_create(NULL, TYPE_ESCC);
+    dev = qdev_new(TYPE_ESCC);
     qdev_prop_set_uint32(dev, "disabled", 0);
     qdev_prop_set_uint32(dev, "frequency", ESCC_CLOCK);
     qdev_prop_set_uint32(dev, "it_shift", 1);
@@ -1000,9 +1005,9 @@ static void sun4m_hw_init(const struct sun4m_hwdef *hwdef,
     qdev_prop_set_chr(dev, "chrA", serial_hd(0));
     qdev_prop_set_uint32(dev, "chnBtype", escc_serial);
     qdev_prop_set_uint32(dev, "chnAtype", escc_serial);
-    qdev_init_nofail(dev);
 
     s = SYS_BUS_DEVICE(dev);
+    sysbus_realize_and_unref(s, &error_fatal);
     sysbus_connect_irq(s, 0, slavio_irq[15]);
     sysbus_connect_irq(s, 1,  slavio_irq[15]);
     sysbus_mmio_map(s, 0, hwdef->serial_base);
@@ -1032,14 +1037,16 @@ static void sun4m_hw_init(const struct sun4m_hwdef *hwdef,
     if (hwdef->dbri_base) {
         /* ISDN chip with attached CS4215 audio codec */
         /* prom space */
-        empty_slot_init(hwdef->dbri_base+0x1000, 0x30);
+        create_unimplemented_device("SUNW,DBRI.prom",
+                                    hwdef->dbri_base + 0x1000, 0x30);
         /* reg space */
-        empty_slot_init(hwdef->dbri_base+0x10000, 0x100);
+        create_unimplemented_device("SUNW,DBRI",
+                                    hwdef->dbri_base + 0x10000, 0x100);
     }
 
     if (hwdef->bpp_base) {
         /* parallel port */
-        empty_slot_init(hwdef->bpp_base, 0x20);
+        create_unimplemented_device("SUNW,bpp", hwdef->bpp_base, 0x20);
     }
 
     initrd_size = 0;
@@ -1047,7 +1054,7 @@ static void sun4m_hw_init(const struct sun4m_hwdef *hwdef,
                                     machine->initrd_filename,
                                     machine->ram_size, &initrd_size);
 
-    nvram_init(nvram, (uint8_t *)&nd_table[0].macaddr, machine->kernel_cmdline,
+    nvram_init(nvram, (uint8_t *)&nd->macaddr, machine->kernel_cmdline,
                machine->boot_order, machine->ram_size, kernel_size,
                graphic_width, graphic_height, graphic_depth,
                hwdef->nvram_machine_id, "Sun4m");
@@ -1056,14 +1063,14 @@ static void sun4m_hw_init(const struct sun4m_hwdef *hwdef,
         ecc_init(hwdef->ecc_base, slavio_irq[28],
                  hwdef->ecc_version);
 
-    dev = qdev_create(NULL, TYPE_FW_CFG_MEM);
+    dev = qdev_new(TYPE_FW_CFG_MEM);
     fw_cfg = FW_CFG(dev);
     qdev_prop_set_uint32(dev, "data_width", 1);
     qdev_prop_set_bit(dev, "dma_enabled", false);
     object_property_add_child(OBJECT(qdev_get_machine()), TYPE_FW_CFG,
-                              OBJECT(fw_cfg), NULL);
-    qdev_init_nofail(dev);
+                              OBJECT(fw_cfg));
     s = SYS_BUS_DEVICE(dev);
+    sysbus_realize_and_unref(s, &error_fatal);
     sysbus_mmio_map(s, 0, CFG_ADDR);
     sysbus_mmio_map(s, 1, CFG_ADDR + 2);
 

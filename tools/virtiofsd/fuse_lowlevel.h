@@ -102,6 +102,11 @@ struct fuse_entry_param {
      *  large value.
      */
     double entry_timeout;
+
+    /**
+     * Flags for fuse_attr.flags that do not fit into attr.
+     */
+    uint32_t attr_flags;
 };
 
 /**
@@ -1777,6 +1782,7 @@ struct fuse_cmdline_opts {
     int syslog;
     int log_level;
     unsigned int max_idle_threads;
+    unsigned long rlimit_nofile;
 };
 
 /**

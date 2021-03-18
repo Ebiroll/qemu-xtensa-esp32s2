@@ -5,21 +5,21 @@ RUN yum -y update
 
 # Please keep this list sorted alphabetically
 ENV PACKAGES \
-    bison \
     bzip2 \
     bzip2-devel \
     ccache \
     csnappy-devel \
     dbus-daemon \
-    flex \
     gcc-c++ \
     gcc \
     gettext \
     git \
     glib2-devel \
+    gnutls-devel \
     libaio-devel \
     libepoxy-devel \
     libfdt-devel \
+    libgcrypt-devel \
     librdmacm-devel \
     libzstd-devel \
     lzo-devel \
@@ -27,10 +27,11 @@ ENV PACKAGES \
     mesa-libEGL-devel \
     mesa-libgbm-devel \
     nettle-devel \
+    ninja-build \
     perl-Test-Harness \
     pixman-devel \
     python3 \
-    SDL-devel \
+    SDL2-devel \
     spice-glib-devel \
     spice-server-devel \
     tar \

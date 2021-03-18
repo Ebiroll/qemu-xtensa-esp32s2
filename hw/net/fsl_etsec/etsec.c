@@ -33,6 +33,7 @@
 #include "hw/qdev-properties.h"
 #include "etsec.h"
 #include "registers.h"
+#include "qapi/error.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
 
@@ -356,7 +357,7 @@ static ssize_t etsec_receive(NetClientState *nc,
 
 #if defined(HEX_DUMP)
     fprintf(stderr, "%s receive size:%zd\n", nc->name, size);
-    qemu_hexdump((void *)buf, stderr, "", size);
+    qemu_hexdump(stderr, "", buf, size);
 #endif
     /* Flush is unnecessary as are already in receiving path */
     etsec->need_flush = false;
@@ -429,7 +430,7 @@ static void etsec_class_init(ObjectClass *klass, void *data)
 }
 
 static TypeInfo etsec_info = {
-    .name                  = "eTSEC",
+    .name                  = TYPE_ETSEC_COMMON,
     .parent                = TYPE_SYS_BUS_DEVICE,
     .instance_size         = sizeof(eTSEC),
     .class_init            = etsec_class_init,
@@ -452,9 +453,9 @@ DeviceState *etsec_create(hwaddr         base,
 {
     DeviceState *dev;
 
-    dev = qdev_create(NULL, "eTSEC");
+    dev = qdev_new("eTSEC");
     qdev_set_nic_properties(dev, nd);
-    qdev_init_nofail(dev);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
 
     sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0, tx_irq);
     sysbus_connect_irq(SYS_BUS_DEVICE(dev), 1, rx_irq);

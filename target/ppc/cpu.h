@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -23,6 +23,7 @@
 #include "qemu/int128.h"
 #include "exec/cpu-defs.h"
 #include "cpu-qom.h"
+#include "qom/object.h"
 
 #define TCG_GUEST_DEFAULT_MO 0
 
@@ -127,8 +128,9 @@ enum {
     POWERPC_EXCP_SDOOR_HV = 100,
     /* ISA 3.00 additions */
     POWERPC_EXCP_HVIRT    = 101,
+    POWERPC_EXCP_SYSCALL_VECTORED = 102, /* scv exception                     */
     /* EOL                                                                   */
-    POWERPC_EXCP_NB       = 102,
+    POWERPC_EXCP_NB       = 103,
     /* QEMU exceptions: used internally during code translation              */
     POWERPC_EXCP_STOP         = 0x200, /* stop translation                   */
     POWERPC_EXCP_BRANCH       = 0x201, /* branch instruction                 */
@@ -463,6 +465,9 @@ typedef struct ppc_v3_pate_t {
 #define DSISR_AMR                0x00200000
 /* Unsupported Radix Tree Configuration */
 #define DSISR_R_BADCONFIG        0x00080000
+#define DSISR_ATOMIC_RC          0x00040000
+/* Unable to translate address of (guest) pde or process/page table entry */
+#define DSISR_PRTABLE_FAULT      0x00020000
 
 /* SRR1 error code fields */
 
@@ -472,9 +477,31 @@ typedef struct ppc_v3_pate_t {
 #define SRR1_PROTFAULT           DSISR_PROTFAULT
 #define SRR1_IAMR                DSISR_AMR
 
+/* SRR1[42:45] wakeup fields for System Reset Interrupt */
+
+#define SRR1_WAKEMASK           0x003c0000 /* reason for wakeup */
+
+#define SRR1_WAKEHMI            0x00280000 /* Hypervisor maintenance */
+#define SRR1_WAKEHVI            0x00240000 /* Hypervisor Virt. Interrupt (P9) */
+#define SRR1_WAKEEE             0x00200000 /* External interrupt */
+#define SRR1_WAKEDEC            0x00180000 /* Decrementer interrupt */
+#define SRR1_WAKEDBELL          0x00140000 /* Privileged doorbell */
+#define SRR1_WAKERESET          0x00100000 /* System reset */
+#define SRR1_WAKEHDBELL         0x000c0000 /* Hypervisor doorbell */
+#define SRR1_WAKESCOM           0x00080000 /* SCOM not in power-saving mode */
+
+/* SRR1[46:47] power-saving exit mode */
+
+#define SRR1_WAKESTATE          0x00030000 /* Powersave exit mask */
+
+#define SRR1_WS_HVLOSS          0x00030000 /* HV resources not maintained */
+#define SRR1_WS_GPRLOSS         0x00020000 /* GPRs not maintained */
+#define SRR1_WS_NOLOSS          0x00010000 /* All resources maintained */
+
 /* Facility Status and Control (FSCR) bits */
 #define FSCR_EBB        (63 - 56) /* Event-Based Branch Facility */
 #define FSCR_TAR        (63 - 55) /* Target Address Register */
+#define FSCR_SCV        (63 - 51) /* System call vectored */
 /* Interrupt cause mask and position in FSCR. HFSCR has the same format */
 #define FSCR_IC_MASK    (0xFFULL)
 #define FSCR_IC_POS     (63 - 7)
@@ -484,6 +511,7 @@ typedef struct ppc_v3_pate_t {
 #define FSCR_IC_TM          5
 #define FSCR_IC_EBB         7
 #define FSCR_IC_TAR         8
+#define FSCR_IC_SCV        12
 
 /* Exception state register bits definition                                  */
 #define ESR_PIL   PPC_BIT(36) /* Illegal Instruction                    */
@@ -551,6 +579,8 @@ enum {
     POWERPC_FLAG_VSX      = 0x00080000,
     /* Has Transaction Memory (ISA 2.07)                                     */
     POWERPC_FLAG_TM       = 0x00100000,
+    /* Has SCV (ISA 3.00)                                                    */
+    POWERPC_FLAG_SCV      = 0x00200000,
 };
 
 /*****************************************************************************/
@@ -585,7 +615,7 @@ enum {
 #define FPSCR_VXCVI  8  /* Floating-point invalid operation exception (int)  */
 #define FPSCR_VE     7  /* Floating-point invalid operation exception enable */
 #define FPSCR_OE     6  /* Floating-point overflow exception enable          */
-#define FPSCR_UE     5  /* Floating-point undeflow exception enable          */
+#define FPSCR_UE     5  /* Floating-point underflow exception enable          */
 #define FPSCR_ZE     4  /* Floating-point zero divide exception enable       */
 #define FPSCR_XE     3  /* Floating-point inexact exception enable           */
 #define FPSCR_NI     2  /* Floating-point non-IEEE mode                      */
@@ -1173,6 +1203,7 @@ PowerPCCPUClass *ppc_cpu_class_by_pvr(uint32_t pvr);
 PowerPCCPUClass *ppc_cpu_class_by_pvr_mask(uint32_t pvr);
 PowerPCCPUClass *ppc_cpu_get_family_class(PowerPCCPUClass *pcc);
 
+#ifndef CONFIG_USER_ONLY
 struct PPCVirtualHypervisorClass {
     InterfaceClass parent;
     void (*hypercall)(PPCVirtualHypervisor *vhyp, PowerPCCPU *cpu);
@@ -1186,21 +1217,14 @@ struct PPCVirtualHypervisorClass {
     void (*hpte_set_r)(PPCVirtualHypervisor *vhyp, hwaddr ptex, uint64_t pte1);
     void (*get_pate)(PPCVirtualHypervisor *vhyp, ppc_v3_pate_t *entry);
     target_ulong (*encode_hpt_for_kvm_pr)(PPCVirtualHypervisor *vhyp);
-#ifndef CONFIG_USER_ONLY
     void (*cpu_exec_enter)(PPCVirtualHypervisor *vhyp, PowerPCCPU *cpu);
     void (*cpu_exec_exit)(PPCVirtualHypervisor *vhyp, PowerPCCPU *cpu);
-#endif
 };
 
 #define TYPE_PPC_VIRTUAL_HYPERVISOR "ppc-virtual-hypervisor"
-#define PPC_VIRTUAL_HYPERVISOR(obj)                 \
-    OBJECT_CHECK(PPCVirtualHypervisor, (obj), TYPE_PPC_VIRTUAL_HYPERVISOR)
-#define PPC_VIRTUAL_HYPERVISOR_CLASS(klass)         \
-    OBJECT_CLASS_CHECK(PPCVirtualHypervisorClass, (klass), \
-                       TYPE_PPC_VIRTUAL_HYPERVISOR)
-#define PPC_VIRTUAL_HYPERVISOR_GET_CLASS(obj) \
-    OBJECT_GET_CLASS(PPCVirtualHypervisorClass, (obj), \
-                     TYPE_PPC_VIRTUAL_HYPERVISOR)
+DECLARE_OBJ_CHECKERS(PPCVirtualHypervisor, PPCVirtualHypervisorClass,
+                     PPC_VIRTUAL_HYPERVISOR, TYPE_PPC_VIRTUAL_HYPERVISOR)
+#endif /* CONFIG_USER_ONLY */
 
 void ppc_cpu_do_interrupt(CPUState *cpu);
 bool ppc_cpu_exec_interrupt(CPUState *cpu, int int_req);
@@ -1220,7 +1244,7 @@ int ppc64_cpu_write_elf64_note(WriteCoreDumpFunction f, CPUState *cs,
 int ppc32_cpu_write_elf32_note(WriteCoreDumpFunction f, CPUState *cs,
                                int cpuid, void *opaque);
 #ifndef CONFIG_USER_ONLY
-void ppc_cpu_do_system_reset(CPUState *cs, target_ulong vector);
+void ppc_cpu_do_system_reset(CPUState *cs);
 void ppc_cpu_do_fwnmi_machine_check(CPUState *cs, target_ulong vector);
 extern const VMStateDescription vmstate_ppc_cpu;
 #endif
@@ -1328,15 +1352,14 @@ bool ppc_check_compat(PowerPCCPU *cpu, uint32_t compat_pvr,
 bool ppc_type_check_compat(const char *cputype, uint32_t compat_pvr,
                            uint32_t min_compat_pvr, uint32_t max_compat_pvr);
 
-void ppc_set_compat(PowerPCCPU *cpu, uint32_t compat_pvr, Error **errp);
+int ppc_set_compat(PowerPCCPU *cpu, uint32_t compat_pvr, Error **errp);
 
 #if !defined(CONFIG_USER_ONLY)
-void ppc_set_compat_all(uint32_t compat_pvr, Error **errp);
+int ppc_set_compat_all(uint32_t compat_pvr, Error **errp);
 #endif
 int ppc_compat_max_vthreads(PowerPCCPU *cpu);
 void ppc_compat_add_property(Object *obj, const char *name,
-                             uint32_t *compat_pvr, const char *basedesc,
-                             Error **errp);
+                             uint32_t *compat_pvr, const char *basedesc);
 #endif /* defined(TARGET_PPC64) */
 
 typedef CPUPPCState CPUArchState;
@@ -2163,6 +2186,8 @@ enum {
     PPC2_PM_ISA206     = 0x0000000000040000ULL,
     /* POWER ISA 3.0                                                         */
     PPC2_ISA300        = 0x0000000000080000ULL,
+    /* POWER ISA 3.1                                                         */
+    PPC2_ISA310        = 0x0000000000100000ULL,
 
 #define PPC_TCG_INSNS2 (PPC2_BOOKE206 | PPC2_VSX | PPC2_PRCNTL | PPC2_DBRX | \
                         PPC2_ISA205 | PPC2_VSX207 | PPC2_PERM_ISA206 | \
@@ -2171,7 +2196,7 @@ enum {
                         PPC2_BCTAR_ISA207 | PPC2_LSQ_ISA207 | \
                         PPC2_ALTIVEC_207 | PPC2_ISA207S | PPC2_DFP | \
                         PPC2_FP_CVT_S64 | PPC2_TM | PPC2_PM_ISA206 | \
-                        PPC2_ISA300)
+                        PPC2_ISA300 | PPC2_ISA310)
 };
 
 /*****************************************************************************/
@@ -2306,13 +2331,13 @@ enum {
     /* Internal hardware exception sources */
     PPC_INTERRUPT_DECR,           /* Decrementer exception                */
     PPC_INTERRUPT_HDECR,          /* Hypervisor decrementer exception     */
-    PPC_INTERRUPT_PIT,            /* Programmable inteval timer interrupt */
+    PPC_INTERRUPT_PIT,            /* Programmable interval timer interrupt */
     PPC_INTERRUPT_FIT,            /* Fixed interval timer interrupt       */
     PPC_INTERRUPT_WDT,            /* Watchdog timer interrupt             */
     PPC_INTERRUPT_CDOORBELL,      /* Critical doorbell interrupt          */
     PPC_INTERRUPT_DOORBELL,       /* Doorbell interrupt                   */
     PPC_INTERRUPT_PERFM,          /* Performance monitor interrupt        */
-    PPC_INTERRUPT_HMI,            /* Hypervisor Maintainance interrupt    */
+    PPC_INTERRUPT_HMI,            /* Hypervisor Maintenance interrupt    */
     PPC_INTERRUPT_HDOORBELL,      /* Hypervisor Doorbell interrupt        */
     PPC_INTERRUPT_HVIRT,          /* Hypervisor virtualization interrupt  */
 };

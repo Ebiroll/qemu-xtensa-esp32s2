@@ -183,6 +183,7 @@ static void esp32_efuse_read_op(Esp32EfuseState *s)
     /* Other wr_dis bits are not emulated, but can be handled here if necessary */
 
     esp32_efuse_op_timer_start(s);
+    qemu_irq_pulse(s->efuse_update_gpio);
 }
 
 static void esp32_efuse_program_op(Esp32EfuseState *s)
@@ -198,7 +199,7 @@ static void esp32_efuse_program_op(Esp32EfuseState *s)
         uint32_t wr_word = wr[i];
         uint32_t wr_dis_word = wr_dis[i];
         uint32_t rd_word = rd[i];
-        dst[i] = (wr_word & (~wr_dis_word)) | (rd_word & wr_dis_word);
+        dst[i] = (wr_word & (~wr_dis_word)) | rd_word;
     }
 
     if (s->blk != NULL) {
@@ -261,6 +262,7 @@ static void esp32_efuse_init(Object *obj)
     sysbus_init_irq(sbd, &s->irq);
 
     timer_init_ns(&s->op_timer, QEMU_CLOCK_VIRTUAL, esp32_efuse_timer_cb, s);
+    qdev_init_gpio_out_named(DEVICE(sbd), &s->efuse_update_gpio, ESP32_EFUSE_UPDATE_GPIO, 1);
 
     memset(&s->efuse_rd, 0, sizeof(s->efuse_rd));
     memset(&s->efuse_wr, 0, sizeof(s->efuse_wr));

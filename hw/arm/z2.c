@@ -26,6 +26,7 @@
 #include "exec/address-spaces.h"
 #include "sysemu/qtest.h"
 #include "cpu.h"
+#include "qom/object.h"
 
 #ifdef DEBUG_Z2
 #define DPRINTF(fmt, ...) \
@@ -102,18 +103,21 @@ static struct arm_boot_info z2_binfo = {
 #define Z2_GPIO_KEY_ON      1
 #define Z2_GPIO_LCD_CS      88
 
-typedef struct {
+struct ZipitLCD {
     SSISlave ssidev;
     int32_t selected;
     int32_t enabled;
     uint8_t buf[3];
     uint32_t cur_reg;
     int pos;
-} ZipitLCD;
+};
+
+#define TYPE_ZIPIT_LCD "zipit-lcd"
+OBJECT_DECLARE_SIMPLE_TYPE(ZipitLCD, ZIPIT_LCD)
 
 static uint32_t zipit_lcd_transfer(SSISlave *dev, uint32_t value)
 {
-    ZipitLCD *z = FROM_SSI_SLAVE(ZipitLCD, dev);
+    ZipitLCD *z = ZIPIT_LCD(dev);
     uint16_t val;
     if (z->selected) {
         z->buf[z->pos] = value & 0xff;
@@ -153,7 +157,7 @@ static void z2_lcd_cs(void *opaque, int line, int level)
 
 static void zipit_lcd_realize(SSISlave *dev, Error **errp)
 {
-    ZipitLCD *z = FROM_SSI_SLAVE(ZipitLCD, dev);
+    ZipitLCD *z = ZIPIT_LCD(dev);
     z->selected = 0;
     z->enabled = 0;
     z->pos = 0;
@@ -185,21 +189,21 @@ static void zipit_lcd_class_init(ObjectClass *klass, void *data)
 }
 
 static const TypeInfo zipit_lcd_info = {
-    .name          = "zipit-lcd",
+    .name          = TYPE_ZIPIT_LCD,
     .parent        = TYPE_SSI_SLAVE,
     .instance_size = sizeof(ZipitLCD),
     .class_init    = zipit_lcd_class_init,
 };
 
 #define TYPE_AER915 "aer915"
-#define AER915(obj) OBJECT_CHECK(AER915State, (obj), TYPE_AER915)
+OBJECT_DECLARE_SIMPLE_TYPE(AER915State, AER915)
 
-typedef struct AER915State {
+struct AER915State {
     I2CSlave parent_obj;
 
     int len;
     uint8_t buf[3];
-} AER915State;
+};
 
 static int aer915_send(I2CSlave *i2c, uint8_t data)
 {
@@ -325,10 +329,10 @@ static void z2_init(MachineState *machine)
 
     type_register_static(&zipit_lcd_info);
     type_register_static(&aer915_info);
-    z2_lcd = ssi_create_slave(mpu->ssp[1], "zipit-lcd");
+    z2_lcd = ssi_create_slave(mpu->ssp[1], TYPE_ZIPIT_LCD);
     bus = pxa2xx_i2c_bus(mpu->i2c[0]);
-    i2c_create_slave(bus, TYPE_AER915, 0x55);
-    wm = i2c_create_slave(bus, TYPE_WM8750, 0x1b);
+    i2c_slave_create_simple(bus, TYPE_AER915, 0x55);
+    wm = DEVICE(i2c_slave_create_simple(bus, TYPE_WM8750, 0x1b));
     mpu->i2s->opaque = wm;
     mpu->i2s->codec_out = wm8750_dac_dat;
     mpu->i2s->codec_in = wm8750_adc_dat;

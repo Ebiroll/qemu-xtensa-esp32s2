@@ -23,6 +23,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/param.h>
+#include <sys/time.h>
+#include <sys/resource.h>
 #include <unistd.h>
 
 #define FUSE_HELPER_OPT(t, p)                       \
@@ -53,6 +55,7 @@ static const struct fuse_opt fuse_helper_opts[] = {
     FUSE_HELPER_OPT("subtype=", nodefault_subtype),
     FUSE_OPT_KEY("subtype=", FUSE_OPT_KEY_KEEP),
     FUSE_HELPER_OPT("max_idle_threads=%u", max_idle_threads),
+    FUSE_HELPER_OPT("--rlimit-nofile=%lu", rlimit_nofile),
     FUSE_HELPER_OPT("--syslog", syslog),
     FUSE_HELPER_OPT_VALUE("log_level=debug", log_level, FUSE_LOG_DEBUG),
     FUSE_HELPER_OPT_VALUE("log_level=info", log_level, FUSE_LOG_INFO),
@@ -156,21 +159,38 @@ void fuse_cmdline_help(void)
            "    -o max_idle_threads        the maximum number of idle worker "
            "threads\n"
            "                               allowed (default: 10)\n"
-           "    -o norace                  disable racy fallback\n"
-           "                               default: false\n"
            "    -o posix_lock|no_posix_lock\n"
            "                               enable/disable remote posix lock\n"
-           "                               default: posix_lock\n"
+           "                               default: no_posix_lock\n"
            "    -o readdirplus|no_readdirplus\n"
            "                               enable/disable readirplus\n"
            "                               default: readdirplus except with "
            "cache=none\n"
+           "    -o sandbox=namespace|chroot\n"
+           "                               sandboxing mode:\n"
+           "                               - namespace: mount, pid, and net\n"
+           "                                 namespaces with pivot_root(2)\n"
+           "                                 into shared directory\n"
+           "                               - chroot: chroot(2) into shared\n"
+           "                                 directory (use in containers)\n"
+           "                               default: namespace\n"
            "    -o timeout=<number>        I/O timeout (seconds)\n"
            "                               default: depends on cache= option.\n"
            "    -o writeback|no_writeback  enable/disable writeback cache\n"
            "                               default: no_writeback\n"
            "    -o xattr|no_xattr          enable/disable xattr\n"
            "                               default: no_xattr\n"
+           "    -o modcaps=CAPLIST         Modify the list of capabilities\n"
+           "                               e.g. -o modcaps=+sys_admin:-chown\n"
+           "    --rlimit-nofile=<num>      set maximum number of file descriptors\n"
+           "                               (0 leaves rlimit unchanged)\n"
+           "                               default: min(1000000, fs.file-max - 16384)\n"
+           "                                        if the current rlimit is lower\n"
+           "    -o allow_direct_io|no_allow_direct_io\n"
+           "                               retain/discard O_DIRECT flags passed down\n"
+           "                               to virtiofsd from guest applications.\n"
+           "                               default: no_allow_direct_io\n"
+           "    -o announce_submounts      Announce sub-mount points to the guest\n"
            );
 }
 
@@ -191,11 +211,51 @@ static int fuse_helper_opt_proc(void *data, const char *arg, int key,
     }
 }
 
+static unsigned long get_default_rlimit_nofile(void)
+{
+    g_autofree gchar *file_max_str = NULL;
+    const rlim_t reserved_fds = 16384; /* leave at least this many fds free */
+    rlim_t max_fds = 1000000; /* our default RLIMIT_NOFILE target */
+    rlim_t file_max;
+    struct rlimit rlim;
+
+    /*
+     * Reduce max_fds below the system-wide maximum, if necessary.  This
+     * ensures there are fds available for other processes so we don't
+     * cause resource exhaustion.
+     */
+    if (!g_file_get_contents("/proc/sys/fs/file-max", &file_max_str,
+                             NULL, NULL)) {
+        fuse_log(FUSE_LOG_ERR, "can't read /proc/sys/fs/file-max\n");
+        exit(1);
+    }
+    file_max = g_ascii_strtoull(file_max_str, NULL, 10);
+    if (file_max < 2 * reserved_fds) {
+        fuse_log(FUSE_LOG_ERR,
+                 "The fs.file-max sysctl is too low (%lu) to allow a "
+                 "reasonable number of open files.\n",
+                 (unsigned long)file_max);
+        exit(1);
+    }
+    max_fds = MIN(file_max - reserved_fds, max_fds);
+
+    if (getrlimit(RLIMIT_NOFILE, &rlim) < 0) {
+        fuse_log(FUSE_LOG_ERR, "getrlimit(RLIMIT_NOFILE): %m\n");
+        exit(1);
+    }
+
+    if (rlim.rlim_cur >= max_fds) {
+        return 0; /* we have more fds available than required! */
+    }
+    return max_fds;
+}
+
 int fuse_parse_cmdline(struct fuse_args *args, struct fuse_cmdline_opts *opts)
 {
     memset(opts, 0, sizeof(struct fuse_cmdline_opts));
 
     opts->max_idle_threads = 10;
+    opts->rlimit_nofile = get_default_rlimit_nofile();
     opts->foreground = 1;
 
     if (fuse_opt_parse(args, opts, fuse_helper_opts, fuse_helper_opt_proc) ==

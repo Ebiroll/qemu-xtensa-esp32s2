@@ -9,6 +9,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu/log.h"
 #include "hw/hw.h"
 #include "hw/irq.h"
 #include "hw/qdev-properties.h"
@@ -17,6 +18,7 @@
 #include "migration/vmstate.h"
 #include "qapi/error.h"
 #include "qemu/module.h"
+#include "qom/object.h"
 
 #define PXA255_DMA_NUM_CHANNELS 16
 #define PXA27X_DMA_NUM_CHANNELS 32
@@ -33,9 +35,9 @@ typedef struct {
 } PXA2xxDMAChannel;
 
 #define TYPE_PXA2XX_DMA "pxa2xx-dma"
-#define PXA2XX_DMA(obj) OBJECT_CHECK(PXA2xxDMAState, (obj), TYPE_PXA2XX_DMA)
+OBJECT_DECLARE_SIMPLE_TYPE(PXA2xxDMAState, PXA2XX_DMA)
 
-typedef struct PXA2xxDMAState {
+struct PXA2xxDMAState {
     SysBusDevice parent_obj;
 
     MemoryRegion iomem;
@@ -57,7 +59,7 @@ typedef struct PXA2xxDMAState {
 
     /* Flag to avoid recursive DMA invocations.  */
     int running;
-} PXA2xxDMAState;
+};
 
 #define DCSR0	0x0000	/* DMA Control / Status register for Channel 0 */
 #define DCSR31	0x007c	/* DMA Control / Status register for Channel 31 */
@@ -268,7 +270,8 @@ static uint64_t pxa2xx_dma_read(void *opaque, hwaddr offset,
     unsigned int channel;
 
     if (size != 4) {
-        hw_error("%s: Bad access width\n", __func__);
+        qemu_log_mask(LOG_GUEST_ERROR, "%s: Bad access width %u\n",
+                      __func__, size);
         return 5;
     }
 
@@ -315,8 +318,8 @@ static uint64_t pxa2xx_dma_read(void *opaque, hwaddr offset,
             return s->chan[channel].cmd;
         }
     }
-
-    hw_error("%s: Bad offset 0x" TARGET_FMT_plx "\n", __func__, offset);
+    qemu_log_mask(LOG_GUEST_ERROR, "%s: Bad offset 0x%" HWADDR_PRIX "\n",
+                  __func__, offset);
     return 7;
 }
 
@@ -327,7 +330,8 @@ static void pxa2xx_dma_write(void *opaque, hwaddr offset,
     unsigned int channel;
 
     if (size != 4) {
-        hw_error("%s: Bad access width\n", __func__);
+        qemu_log_mask(LOG_GUEST_ERROR, "%s: Bad access width %u\n",
+                      __func__, size);
         return;
     }
 
@@ -420,7 +424,8 @@ static void pxa2xx_dma_write(void *opaque, hwaddr offset,
             break;
         }
     fail:
-        hw_error("%s: Bad offset " TARGET_FMT_plx "\n", __func__, offset);
+        qemu_log_mask(LOG_GUEST_ERROR, "%s: Bad offset 0x%" HWADDR_PRIX "\n",
+                      __func__, offset);
     }
 }
 
@@ -491,9 +496,9 @@ DeviceState *pxa27x_dma_init(hwaddr base, qemu_irq irq)
 {
     DeviceState *dev;
 
-    dev = qdev_create(NULL, "pxa2xx-dma");
+    dev = qdev_new("pxa2xx-dma");
     qdev_prop_set_int32(dev, "channels", PXA27X_DMA_NUM_CHANNELS);
-    qdev_init_nofail(dev);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
 
     sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, base);
     sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0, irq);
@@ -505,9 +510,9 @@ DeviceState *pxa255_dma_init(hwaddr base, qemu_irq irq)
 {
     DeviceState *dev;
 
-    dev = qdev_create(NULL, "pxa2xx-dma");
+    dev = qdev_new("pxa2xx-dma");
     qdev_prop_set_int32(dev, "channels", PXA27X_DMA_NUM_CHANNELS);
-    qdev_init_nofail(dev);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
 
     sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, base);
     sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0, irq);

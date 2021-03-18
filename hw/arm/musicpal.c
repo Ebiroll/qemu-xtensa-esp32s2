@@ -27,12 +27,15 @@
 #include "ui/console.h"
 #include "hw/i2c/i2c.h"
 #include "hw/irq.h"
+#include "hw/or-irq.h"
 #include "hw/audio/wm8750.h"
 #include "sysemu/block-backend.h"
 #include "sysemu/runstate.h"
+#include "sysemu/dma.h"
 #include "exec/address-spaces.h"
 #include "ui/pixel_ops.h"
 #include "qemu/cutils.h"
+#include "qom/object.h"
 
 #define MP_MISC_BASE            0x80002000
 #define MP_MISC_SIZE            0x00001000
@@ -75,8 +78,7 @@
 #define MP_TIMER4_IRQ           7
 #define MP_EHCI_IRQ             8
 #define MP_ETH_IRQ              9
-#define MP_UART1_IRQ            11
-#define MP_UART2_IRQ            11
+#define MP_UART_SHARED_IRQ      11
 #define MP_GPIO_IRQ             12
 #define MP_RTC_IRQ              28
 #define MP_AUDIO_IRQ            30
@@ -153,16 +155,17 @@ typedef struct mv88w8618_rx_desc {
 } mv88w8618_rx_desc;
 
 #define TYPE_MV88W8618_ETH "mv88w8618_eth"
-#define MV88W8618_ETH(obj) \
-    OBJECT_CHECK(mv88w8618_eth_state, (obj), TYPE_MV88W8618_ETH)
+OBJECT_DECLARE_SIMPLE_TYPE(mv88w8618_eth_state, MV88W8618_ETH)
 
-typedef struct mv88w8618_eth_state {
+struct mv88w8618_eth_state {
     /*< private >*/
     SysBusDevice parent_obj;
     /*< public >*/
 
     MemoryRegion iomem;
     qemu_irq irq;
+    MemoryRegion *dma_mr;
+    AddressSpace dma_as;
     uint32_t smir;
     uint32_t icr;
     uint32_t imr;
@@ -174,21 +177,23 @@ typedef struct mv88w8618_eth_state {
     uint32_t cur_rx[4];
     NICState *nic;
     NICConf conf;
-} mv88w8618_eth_state;
+};
 
-static void eth_rx_desc_put(uint32_t addr, mv88w8618_rx_desc *desc)
+static void eth_rx_desc_put(AddressSpace *dma_as, uint32_t addr,
+                            mv88w8618_rx_desc *desc)
 {
     cpu_to_le32s(&desc->cmdstat);
     cpu_to_le16s(&desc->bytes);
     cpu_to_le16s(&desc->buffer_size);
     cpu_to_le32s(&desc->buffer);
     cpu_to_le32s(&desc->next);
-    cpu_physical_memory_write(addr, desc, sizeof(*desc));
+    dma_memory_write(dma_as, addr, desc, sizeof(*desc));
 }
 
-static void eth_rx_desc_get(uint32_t addr, mv88w8618_rx_desc *desc)
+static void eth_rx_desc_get(AddressSpace *dma_as, uint32_t addr,
+                            mv88w8618_rx_desc *desc)
 {
-    cpu_physical_memory_read(addr, desc, sizeof(*desc));
+    dma_memory_read(dma_as, addr, desc, sizeof(*desc));
     le32_to_cpus(&desc->cmdstat);
     le16_to_cpus(&desc->bytes);
     le16_to_cpus(&desc->buffer_size);
@@ -209,9 +214,9 @@ static ssize_t eth_receive(NetClientState *nc, const uint8_t *buf, size_t size)
             continue;
         }
         do {
-            eth_rx_desc_get(desc_addr, &desc);
+            eth_rx_desc_get(&s->dma_as, desc_addr, &desc);
             if ((desc.cmdstat & MP_ETH_RX_OWN) && desc.buffer_size >= size) {
-                cpu_physical_memory_write(desc.buffer + s->vlan_header,
+                dma_memory_write(&s->dma_as, desc.buffer + s->vlan_header,
                                           buf, size);
                 desc.bytes = size + s->vlan_header;
                 desc.cmdstat &= ~MP_ETH_RX_OWN;
@@ -221,7 +226,7 @@ static ssize_t eth_receive(NetClientState *nc, const uint8_t *buf, size_t size)
                 if (s->icr & s->imr) {
                     qemu_irq_raise(s->irq);
                 }
-                eth_rx_desc_put(desc_addr, &desc);
+                eth_rx_desc_put(&s->dma_as, desc_addr, &desc);
                 return size;
             }
             desc_addr = desc.next;
@@ -230,19 +235,21 @@ static ssize_t eth_receive(NetClientState *nc, const uint8_t *buf, size_t size)
     return size;
 }
 
-static void eth_tx_desc_put(uint32_t addr, mv88w8618_tx_desc *desc)
+static void eth_tx_desc_put(AddressSpace *dma_as, uint32_t addr,
+                            mv88w8618_tx_desc *desc)
 {
     cpu_to_le32s(&desc->cmdstat);
     cpu_to_le16s(&desc->res);
     cpu_to_le16s(&desc->bytes);
     cpu_to_le32s(&desc->buffer);
     cpu_to_le32s(&desc->next);
-    cpu_physical_memory_write(addr, desc, sizeof(*desc));
+    dma_memory_write(dma_as, addr, desc, sizeof(*desc));
 }
 
-static void eth_tx_desc_get(uint32_t addr, mv88w8618_tx_desc *desc)
+static void eth_tx_desc_get(AddressSpace *dma_as, uint32_t addr,
+                            mv88w8618_tx_desc *desc)
 {
-    cpu_physical_memory_read(addr, desc, sizeof(*desc));
+    dma_memory_read(dma_as, addr, desc, sizeof(*desc));
     le32_to_cpus(&desc->cmdstat);
     le16_to_cpus(&desc->res);
     le16_to_cpus(&desc->bytes);
@@ -259,17 +266,17 @@ static void eth_send(mv88w8618_eth_state *s, int queue_index)
     int len;
 
     do {
-        eth_tx_desc_get(desc_addr, &desc);
+        eth_tx_desc_get(&s->dma_as, desc_addr, &desc);
         next_desc = desc.next;
         if (desc.cmdstat & MP_ETH_TX_OWN) {
             len = desc.bytes;
             if (len < 2048) {
-                cpu_physical_memory_read(desc.buffer, buf, len);
+                dma_memory_read(&s->dma_as, desc.buffer, buf, len);
                 qemu_send_packet(qemu_get_queue(s->nic), buf, len);
             }
             desc.cmdstat &= ~MP_ETH_TX_OWN;
             s->icr |= 1 << (MP_ETH_IRQ_TXLO_BIT - queue_index);
-            eth_tx_desc_put(desc_addr, &desc);
+            eth_tx_desc_put(&s->dma_as, desc_addr, &desc);
         }
         desc_addr = next_desc;
     } while (desc_addr != s->tx_queue[queue_index]);
@@ -405,6 +412,12 @@ static void mv88w8618_eth_realize(DeviceState *dev, Error **errp)
 {
     mv88w8618_eth_state *s = MV88W8618_ETH(dev);
 
+    if (!s->dma_mr) {
+        error_setg(errp, TYPE_MV88W8618_ETH " 'dma-memory' link not set");
+        return;
+    }
+
+    address_space_init(&s->dma_as, s->dma_mr, "emac-dma");
     s->nic = qemu_new_nic(&net_mv88w8618_info, &s->conf,
                           object_get_typename(OBJECT(dev)), dev->id, s);
 }
@@ -428,6 +441,8 @@ static const VMStateDescription mv88w8618_eth_vmsd = {
 
 static Property mv88w8618_eth_properties[] = {
     DEFINE_NIC_PROPERTIES(mv88w8618_eth_state, conf),
+    DEFINE_PROP_LINK("dma-memory", mv88w8618_eth_state, dma_mr,
+                     TYPE_MEMORY_REGION, MemoryRegion *),
     DEFINE_PROP_END_OF_LIST(),
 };
 
@@ -468,10 +483,9 @@ static const TypeInfo mv88w8618_eth_info = {
 #define MP_LCD_TEXTCOLOR        0xe0e0ff /* RRGGBB */
 
 #define TYPE_MUSICPAL_LCD "musicpal_lcd"
-#define MUSICPAL_LCD(obj) \
-    OBJECT_CHECK(musicpal_lcd_state, (obj), TYPE_MUSICPAL_LCD)
+OBJECT_DECLARE_SIMPLE_TYPE(musicpal_lcd_state, MUSICPAL_LCD)
 
-typedef struct musicpal_lcd_state {
+struct musicpal_lcd_state {
     /*< private >*/
     SysBusDevice parent_obj;
     /*< public >*/
@@ -484,7 +498,7 @@ typedef struct musicpal_lcd_state {
     uint32_t page_off;
     QemuConsole *con;
     uint8_t video_ram[128*64/8];
-} musicpal_lcd_state;
+};
 
 static uint8_t scale_lcd_color(musicpal_lcd_state *s, uint8_t col)
 {
@@ -685,10 +699,9 @@ static const TypeInfo musicpal_lcd_info = {
 #define MP_PIC_ENABLE_CLR       0x0C
 
 #define TYPE_MV88W8618_PIC "mv88w8618_pic"
-#define MV88W8618_PIC(obj) \
-    OBJECT_CHECK(mv88w8618_pic_state, (obj), TYPE_MV88W8618_PIC)
+OBJECT_DECLARE_SIMPLE_TYPE(mv88w8618_pic_state, MV88W8618_PIC)
 
-typedef struct mv88w8618_pic_state {
+struct mv88w8618_pic_state {
     /*< private >*/
     SysBusDevice parent_obj;
     /*< public >*/
@@ -697,7 +710,7 @@ typedef struct mv88w8618_pic_state {
     uint32_t level;
     uint32_t enabled;
     qemu_irq parent_irq;
-} mv88w8618_pic_state;
+};
 
 static void mv88w8618_pic_update(mv88w8618_pic_state *s)
 {
@@ -822,17 +835,16 @@ typedef struct mv88w8618_timer_state {
 } mv88w8618_timer_state;
 
 #define TYPE_MV88W8618_PIT "mv88w8618_pit"
-#define MV88W8618_PIT(obj) \
-    OBJECT_CHECK(mv88w8618_pit_state, (obj), TYPE_MV88W8618_PIT)
+OBJECT_DECLARE_SIMPLE_TYPE(mv88w8618_pit_state, MV88W8618_PIT)
 
-typedef struct mv88w8618_pit_state {
+struct mv88w8618_pit_state {
     /*< private >*/
     SysBusDevice parent_obj;
     /*< public >*/
 
     MemoryRegion iomem;
     mv88w8618_timer_state timer[4];
-} mv88w8618_pit_state;
+};
 
 static void mv88w8618_timer_tick(void *opaque)
 {
@@ -989,17 +1001,16 @@ static const TypeInfo mv88w8618_pit_info = {
 #define MP_FLASHCFG_CFGR0    0x04
 
 #define TYPE_MV88W8618_FLASHCFG "mv88w8618_flashcfg"
-#define MV88W8618_FLASHCFG(obj) \
-    OBJECT_CHECK(mv88w8618_flashcfg_state, (obj), TYPE_MV88W8618_FLASHCFG)
+OBJECT_DECLARE_SIMPLE_TYPE(mv88w8618_flashcfg_state, MV88W8618_FLASHCFG)
 
-typedef struct mv88w8618_flashcfg_state {
+struct mv88w8618_flashcfg_state {
     /*< private >*/
     SysBusDevice parent_obj;
     /*< public >*/
 
     MemoryRegion iomem;
     uint32_t cfgr0;
-} mv88w8618_flashcfg_state;
+};
 
 static uint64_t mv88w8618_flashcfg_read(void *opaque,
                                         hwaddr offset,
@@ -1075,14 +1086,13 @@ static const TypeInfo mv88w8618_flashcfg_info = {
 
 #define MP_BOARD_REVISION       0x31
 
-typedef struct {
+struct MusicPalMiscState {
     SysBusDevice parent_obj;
     MemoryRegion iomem;
-} MusicPalMiscState;
+};
 
 #define TYPE_MUSICPAL_MISC "musicpal-misc"
-#define MUSICPAL_MISC(obj) \
-     OBJECT_CHECK(MusicPalMiscState, (obj), TYPE_MUSICPAL_MISC)
+OBJECT_DECLARE_SIMPLE_TYPE(MusicPalMiscState, MUSICPAL_MISC)
 
 static uint64_t musicpal_misc_read(void *opaque, hwaddr offset,
                                    unsigned size)
@@ -1187,10 +1197,9 @@ static void mv88w8618_wlan_realize(DeviceState *dev, Error **errp)
 #define MP_OE_LCD_BRIGHTNESS    0x0007
 
 #define TYPE_MUSICPAL_GPIO "musicpal_gpio"
-#define MUSICPAL_GPIO(obj) \
-    OBJECT_CHECK(musicpal_gpio_state, (obj), TYPE_MUSICPAL_GPIO)
+OBJECT_DECLARE_SIMPLE_TYPE(musicpal_gpio_state, MUSICPAL_GPIO)
 
-typedef struct musicpal_gpio_state {
+struct musicpal_gpio_state {
     /*< private >*/
     SysBusDevice parent_obj;
     /*< public >*/
@@ -1204,7 +1213,7 @@ typedef struct musicpal_gpio_state {
     uint32_t isr;
     qemu_irq irq;
     qemu_irq out[5]; /* 3 brightness out + 2 lcd (data and clock ) */
-} musicpal_gpio_state;
+};
 
 static void musicpal_gpio_brightness_update(musicpal_gpio_state *s) {
     int i;
@@ -1437,10 +1446,9 @@ static const TypeInfo musicpal_gpio_info = {
 #define MP_KEY_BTN_NAVIGATION  (1 << 7)
 
 #define TYPE_MUSICPAL_KEY "musicpal_key"
-#define MUSICPAL_KEY(obj) \
-    OBJECT_CHECK(musicpal_key_state, (obj), TYPE_MUSICPAL_KEY)
+OBJECT_DECLARE_SIMPLE_TYPE(musicpal_key_state, MUSICPAL_KEY)
 
-typedef struct musicpal_key_state {
+struct musicpal_key_state {
     /*< private >*/
     SysBusDevice parent_obj;
     /*< public >*/
@@ -1449,7 +1457,7 @@ typedef struct musicpal_key_state {
     uint32_t kbd_extended;
     uint32_t pressed_keys;
     qemu_irq out[8];
-} musicpal_key_state;
+};
 
 static void musicpal_key_event(void *opaque, int keycode)
 {
@@ -1579,12 +1587,13 @@ static struct arm_boot_info musicpal_binfo = {
 static void musicpal_init(MachineState *machine)
 {
     ARMCPU *cpu;
-    qemu_irq pic[32];
     DeviceState *dev;
+    DeviceState *pic;
+    DeviceState *uart_orgate;
     DeviceState *i2c_dev;
     DeviceState *lcd_dev;
     DeviceState *key_dev;
-    DeviceState *wm8750_dev;
+    I2CSlave *wm8750_dev;
     SysBusDevice *s;
     I2CBus *i2c;
     int i;
@@ -1610,23 +1619,27 @@ static void musicpal_init(MachineState *machine)
                            &error_fatal);
     memory_region_add_subregion(address_space_mem, MP_SRAM_BASE, sram);
 
-    dev = sysbus_create_simple(TYPE_MV88W8618_PIC, MP_PIC_BASE,
+    pic = sysbus_create_simple(TYPE_MV88W8618_PIC, MP_PIC_BASE,
                                qdev_get_gpio_in(DEVICE(cpu), ARM_CPU_IRQ));
-    for (i = 0; i < 32; i++) {
-        pic[i] = qdev_get_gpio_in(dev, i);
-    }
-    sysbus_create_varargs(TYPE_MV88W8618_PIT, MP_PIT_BASE, pic[MP_TIMER1_IRQ],
-                          pic[MP_TIMER2_IRQ], pic[MP_TIMER3_IRQ],
-                          pic[MP_TIMER4_IRQ], NULL);
+    sysbus_create_varargs(TYPE_MV88W8618_PIT, MP_PIT_BASE,
+                          qdev_get_gpio_in(pic, MP_TIMER1_IRQ),
+                          qdev_get_gpio_in(pic, MP_TIMER2_IRQ),
+                          qdev_get_gpio_in(pic, MP_TIMER3_IRQ),
+                          qdev_get_gpio_in(pic, MP_TIMER4_IRQ), NULL);
 
-    if (serial_hd(0)) {
-        serial_mm_init(address_space_mem, MP_UART1_BASE, 2, pic[MP_UART1_IRQ],
-                       1825000, serial_hd(0), DEVICE_NATIVE_ENDIAN);
-    }
-    if (serial_hd(1)) {
-        serial_mm_init(address_space_mem, MP_UART2_BASE, 2, pic[MP_UART2_IRQ],
-                       1825000, serial_hd(1), DEVICE_NATIVE_ENDIAN);
-    }
+    /* Logically OR both UART IRQs together */
+    uart_orgate = DEVICE(object_new(TYPE_OR_IRQ));
+    object_property_set_int(OBJECT(uart_orgate), "num-lines", 2, &error_fatal);
+    qdev_realize_and_unref(uart_orgate, NULL, &error_fatal);
+    qdev_connect_gpio_out(DEVICE(uart_orgate), 0,
+                          qdev_get_gpio_in(pic, MP_UART_SHARED_IRQ));
+
+    serial_mm_init(address_space_mem, MP_UART1_BASE, 2,
+                   qdev_get_gpio_in(uart_orgate, 0),
+                   1825000, serial_hd(0), DEVICE_NATIVE_ENDIAN);
+    serial_mm_init(address_space_mem, MP_UART2_BASE, 2,
+                   qdev_get_gpio_in(uart_orgate, 1),
+                   1825000, serial_hd(1), DEVICE_NATIVE_ENDIAN);
 
     /* Register flash */
     dinfo = drive_get(IF_PFLASH, 0, 0);
@@ -1655,18 +1668,21 @@ static void musicpal_init(MachineState *machine)
     sysbus_create_simple(TYPE_MV88W8618_FLASHCFG, MP_FLASHCFG_BASE, NULL);
 
     qemu_check_nic_model(&nd_table[0], "mv88w8618");
-    dev = qdev_create(NULL, TYPE_MV88W8618_ETH);
+    dev = qdev_new(TYPE_MV88W8618_ETH);
     qdev_set_nic_properties(dev, &nd_table[0]);
-    qdev_init_nofail(dev);
+    object_property_set_link(OBJECT(dev), "dma-memory",
+                             OBJECT(get_system_memory()), &error_fatal);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, MP_ETH_BASE);
-    sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0, pic[MP_ETH_IRQ]);
+    sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0,
+                       qdev_get_gpio_in(pic, MP_ETH_IRQ));
 
     sysbus_create_simple("mv88w8618_wlan", MP_WLAN_BASE, NULL);
 
     sysbus_create_simple(TYPE_MUSICPAL_MISC, MP_MISC_BASE, NULL);
 
     dev = sysbus_create_simple(TYPE_MUSICPAL_GPIO, MP_GPIO_BASE,
-                               pic[MP_GPIO_IRQ]);
+                               qdev_get_gpio_in(pic, MP_GPIO_IRQ));
     i2c_dev = sysbus_create_simple("gpio_i2c", -1, NULL);
     i2c = (I2CBus *)qdev_get_child_bus(i2c_dev, "i2c");
 
@@ -1691,14 +1707,14 @@ static void musicpal_init(MachineState *machine)
         qdev_connect_gpio_out(key_dev, i, qdev_get_gpio_in(dev, i + 15));
     }
 
-    wm8750_dev = i2c_create_slave(i2c, TYPE_WM8750, MP_WM_ADDR);
-    dev = qdev_create(NULL, TYPE_MV88W8618_AUDIO);
+    wm8750_dev = i2c_slave_create_simple(i2c, TYPE_WM8750, MP_WM_ADDR);
+    dev = qdev_new(TYPE_MV88W8618_AUDIO);
     s = SYS_BUS_DEVICE(dev);
-    object_property_set_link(OBJECT(dev), OBJECT(wm8750_dev),
-                             "wm8750", NULL);
-    qdev_init_nofail(dev);
+    object_property_set_link(OBJECT(dev), "wm8750", OBJECT(wm8750_dev),
+                             NULL);
+    sysbus_realize_and_unref(s, &error_fatal);
     sysbus_mmio_map(s, 0, MP_AUDIO_BASE);
-    sysbus_connect_irq(s, 0, pic[MP_AUDIO_IRQ]);
+    sysbus_connect_irq(s, 0, qdev_get_gpio_in(pic, MP_AUDIO_IRQ));
 
     musicpal_binfo.ram_size = MP_RAM_DEFAULT_SIZE;
     arm_load_kernel(cpu, machine, &musicpal_binfo);

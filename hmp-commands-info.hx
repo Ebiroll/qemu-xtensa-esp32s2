@@ -254,11 +254,12 @@ ERST
 
     {
         .name       = "mtree",
-        .args_type  = "flatview:-f,dispatch_tree:-d,owner:-o",
-        .params     = "[-f][-d][-o]",
+        .args_type  = "flatview:-f,dispatch_tree:-d,owner:-o,disabled:-D",
+        .params     = "[-f][-d][-o][-D]",
         .help       = "show memory tree (-f: dump flat view for address spaces;"
                       "-d: dump dispatch tree, valid with -f only);"
-                      "-o: dump region owners/parents",
+                      "-o: dump region owners/parents;"
+                      "-D: dump disabled regions",
         .cmd        = hmp_info_mtree,
     },
 
@@ -880,4 +881,15 @@ SRST
     Show SEV information.
 ERST
 
+    {
+        .name       = "replay",
+        .args_type  = "",
+        .params     = "",
+        .help       = "show record/replay information",
+        .cmd        = hmp_info_replay,
+    },
 
+SRST
+  ``info replay``
+    Display the record/replay information: mode and the current icount.
+ERST

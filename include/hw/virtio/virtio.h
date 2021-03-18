@@ -21,6 +21,7 @@
 #include "qemu/event_notifier.h"
 #include "standard-headers/linux/virtio_config.h"
 #include "standard-headers/linux/virtio_ring.h"
+#include "qom/object.h"
 
 /* A guest should never accept this.  It implies negotiation is broken. */
 #define VIRTIO_F_BAD_FEATURE		30
@@ -67,12 +68,7 @@ typedef struct VirtQueueElement
 #define VIRTIO_NO_VECTOR 0xffff
 
 #define TYPE_VIRTIO_DEVICE "virtio-device"
-#define VIRTIO_DEVICE_GET_CLASS(obj) \
-        OBJECT_GET_CLASS(VirtioDeviceClass, obj, TYPE_VIRTIO_DEVICE)
-#define VIRTIO_DEVICE_CLASS(klass) \
-        OBJECT_CLASS_CHECK(VirtioDeviceClass, klass, TYPE_VIRTIO_DEVICE)
-#define VIRTIO_DEVICE(obj) \
-        OBJECT_CHECK(VirtIODevice, (obj), TYPE_VIRTIO_DEVICE)
+OBJECT_DECLARE_TYPE(VirtIODevice, VirtioDeviceClass, VIRTIO_DEVICE)
 
 enum virtio_device_endian {
     VIRTIO_DEVICE_ENDIAN_UNKNOWN,
@@ -105,6 +101,7 @@ struct VirtIODevice
     bool use_started;
     bool started;
     bool start_on_kick; /* when virtio 1.0 feature has not been negotiated */
+    bool disable_legacy_check;
     VMChangeStateEntry *vmstate;
     char *bus_name;
     uint8_t device_endian;
@@ -113,7 +110,7 @@ struct VirtIODevice
     QLIST_HEAD(, VirtQueue) *vector_queues;
 };
 
-typedef struct VirtioDeviceClass {
+struct VirtioDeviceClass {
     /*< private >*/
     DeviceClass parent;
     /*< public >*/
@@ -163,7 +160,7 @@ typedef struct VirtioDeviceClass {
     int (*post_load)(VirtIODevice *vdev);
     const VMStateDescription *vmsd;
     bool (*primary_unplug_pending)(void *opaque);
-} VirtioDeviceClass;
+};
 
 void virtio_instance_init_common(Object *proxy_obj, void *data,
                                  size_t vdev_size, const char *vdev_name);
@@ -295,6 +292,7 @@ typedef struct VirtIORNGConf VirtIORNGConf;
                       VIRTIO_F_RING_PACKED, false)
 
 hwaddr virtio_queue_get_desc_addr(VirtIODevice *vdev, int n);
+bool virtio_queue_enabled_legacy(VirtIODevice *vdev, int n);
 bool virtio_queue_enabled(VirtIODevice *vdev, int n);
 hwaddr virtio_queue_get_avail_addr(VirtIODevice *vdev, int n);
 hwaddr virtio_queue_get_used_addr(VirtIODevice *vdev, int n);
@@ -395,5 +393,8 @@ static inline bool virtio_device_disabled(VirtIODevice *vdev)
 {
     return unlikely(vdev->disabled || vdev->broken);
 }
+
+bool virtio_legacy_allowed(VirtIODevice *vdev);
+bool virtio_legacy_check_disabled(VirtIODevice *vdev);
 
 #endif

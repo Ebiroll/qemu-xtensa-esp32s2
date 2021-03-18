@@ -4,29 +4,11 @@
 #include "hw/registerfields.h"
 #include "hw/sysbus.h"
 #include "hw/misc/esp32_reg.h"
-#include "hw/misc/esp32_crosscore_int.h"
 #include "sysemu/block-backend.h"
-#include "target/xtensa/cpu.h"
-#include "target/xtensa/cpu-qom.h"
+#include "hw/misc/esp32_flash_enc.h"
 
 typedef struct Esp32DportState Esp32DportState;
 typedef struct Esp32CacheState Esp32CacheState;
-
-#define TYPE_ESP32_INTMATRIX "misc.esp32.intmatrix"
-#define ESP32_INTMATRIX(obj) OBJECT_CHECK(Esp32IntMatrixState, (obj), TYPE_ESP32_INTMATRIX)
-
-typedef struct Esp32IntMatrixState {
-    SysBusDevice parent_obj;
-
-    MemoryRegion iomem;
-    qemu_irq *outputs[ESP32_CPU_COUNT];
-    uint8_t irq_map[ESP32_CPU_COUNT][ESP32_INT_MATRIX_INPUTS];
-
-    /* properties */
-    XtensaCPU *cpu[ESP32_CPU_COUNT];
-} Esp32IntMatrixState;
-
-
 
 #define TYPE_ESP32_DPORT "misc.esp32.dport"
 #define ESP32_DPORT(obj) OBJECT_CHECK(Esp32DportState, (obj), TYPE_ESP32_DPORT)
@@ -73,13 +55,14 @@ typedef struct Esp32DportState {
 
     MemoryRegion iomem;
     int cpu_count;
-    Esp32IntMatrixState intmatrix;
-    Esp32CrosscoreInt   crosscore_int;
     Esp32CacheState cache_state[ESP32_CPU_COUNT];
     BlockBackend *flash_blk;
     qemu_irq appcpu_stall_req;
     qemu_irq appcpu_reset_req;
     qemu_irq clk_update_req;
+    qemu_irq cache_ill_irq;
+    qemu_irq flash_enc_en_gpio;
+    qemu_irq flash_dec_en_gpio;
 
     bool appcpu_reset_state;
     bool appcpu_stall_state;
@@ -87,6 +70,8 @@ typedef struct Esp32DportState {
     uint32_t appcpu_boot_addr;
     uint32_t cpuperiod_sel;
     uint32_t cache_ill_trap_en_reg;
+    uint32_t slave_spi_config_reg;
+
 } Esp32DportState;
 
 void esp32_dport_clear_ill_trap_state(Esp32DportState* s);
@@ -94,6 +79,9 @@ void esp32_dport_clear_ill_trap_state(Esp32DportState* s);
 #define ESP32_DPORT_APPCPU_STALL_GPIO   "appcpu-stall"
 #define ESP32_DPORT_APPCPU_RESET_GPIO   "appcpu-reset"
 #define ESP32_DPORT_CLK_UPDATE_GPIO     "clk-update"
+#define ESP32_DPORT_CACHE_ILL_IRQ_GPIO  "cache-ill-irq"
+#define ESP32_DPORT_FLASH_ENC_EN_GPIO   "flash-enc-en"
+#define ESP32_DPORT_FLASH_DEC_EN_GPIO   "flash-dec-en"
 
 
 REG32(DPORT_APPCPU_RESET, 0x2c)
@@ -131,6 +119,10 @@ REG32(DPORT_APP_CACHE_CTRL1, 0x5C)
     FIELD(DPORT_APP_CACHE_CTRL1, MASK_IROM0, 2, 1)
     FIELD(DPORT_APP_CACHE_CTRL1, MASK_IRAM1, 1, 1)
     FIELD(DPORT_APP_CACHE_CTRL1, MASK_IRAM0, 0, 1)
+
+REG32(DPORT_SLAVE_SPI_CONFIG, 0xC8)
+    FIELD(DPORT_SLAVE_SPI_CONFIG, SLAVE_SPI_ENCRYPT_ENABLE, 8, 1)
+    FIELD(DPORT_SLAVE_SPI_CONFIG, SLAVE_SPI_DECRYPT_ENABLE, 12, 1)
 
 REG32(DPORT_CPU_INTR_FROM_CPU_0, 0xdc)
 REG32(DPORT_CPU_INTR_FROM_CPU_1, 0xe0)

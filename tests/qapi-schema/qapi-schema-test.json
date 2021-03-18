@@ -1,4 +1,5 @@
 # *-*- Mode: Python -*-*
+# vim: filetype=python
 
 # This file is a stress test of supported qapi constructs that must
 # parse and compile correctly.
@@ -147,6 +148,7 @@
   'returns': 'UserDefTwo' }
 
 { 'command': 'cmd-success-response', 'data': {}, 'success-response': false }
+{ 'command': 'coroutine-cmd', 'data': {}, 'coroutine': true }
 
 # Returning a non-dictionary requires a name from the whitelist
 { 'command': 'guest-get-time', 'data': {'a': 'int', '*b': 'int' },

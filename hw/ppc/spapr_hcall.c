@@ -360,7 +360,7 @@ static void *hpt_prepare_thread(void *opaque)
     SpaprPendingHpt *pending = opaque;
     size_t size = 1ULL << pending->shift;
 
-    pending->hpt = qemu_memalign(size, size);
+    pending->hpt = qemu_try_memalign(size, size);
     if (pending->hpt) {
         memset(pending->hpt, 0, size);
         pending->ret = H_SUCCESS;
@@ -1590,12 +1590,11 @@ static target_ulong h_signal_sys_reset(PowerPCCPU *cpu,
     }
 }
 
-static uint32_t cas_check_pvr(SpaprMachineState *spapr, PowerPCCPU *cpu,
-                              target_ulong *addr, bool *raw_mode_supported,
-                              Error **errp)
+/* Returns either a logical PVR or zero if none was found */
+static uint32_t cas_check_pvr(PowerPCCPU *cpu, uint32_t max_compat,
+                              target_ulong *addr, bool *raw_mode_supported)
 {
     bool explicit_match = false; /* Matched the CPU's real PVR */
-    uint32_t max_compat = spapr->max_compat_pvr;
     uint32_t best_compat = 0;
     int i;
 
@@ -1624,14 +1623,6 @@ static uint32_t cas_check_pvr(SpaprMachineState *spapr, PowerPCCPU *cpu,
         }
     }
 
-    if ((best_compat == 0) && (!explicit_match || max_compat)) {
-        /* We couldn't find a suitable compatibility mode, and either
-         * the guest doesn't support "raw" mode for this CPU, or raw
-         * mode is disabled because a maximum compat mode is set */
-        error_setg(errp, "Couldn't negotiate a suitable PVR during CAS");
-        return 0;
-    }
-
     *raw_mode_supported = explicit_match;
 
     /* Parsing finished */
@@ -1655,7 +1646,8 @@ static void spapr_handle_transient_dev_before_cas(SpaprMachineState *spapr)
             continue;
         }
         drc = SPAPR_DR_CONNECTOR(object_property_get_link(drc_container,
-                                                          prop->name, NULL));
+                                                          prop->name,
+                                                          &error_abort));
 
         if (spapr_drc_transient(drc)) {
             spapr_drc_reset(drc);
@@ -1665,23 +1657,20 @@ static void spapr_handle_transient_dev_before_cas(SpaprMachineState *spapr)
     spapr_clear_pending_hotplug_events(spapr);
 }
 
-static target_ulong h_client_architecture_support(PowerPCCPU *cpu,
-                                                  SpaprMachineState *spapr,
-                                                  target_ulong opcode,
-                                                  target_ulong *args)
+target_ulong do_client_architecture_support(PowerPCCPU *cpu,
+                                            SpaprMachineState *spapr,
+                                            target_ulong vec,
+                                            target_ulong fdt_bufsize)
 {
-    /* Working address in data buffer */
-    target_ulong addr = ppc64_phys_to_real(args[0]);
-    target_ulong fdt_buf = args[1];
-    target_ulong fdt_bufsize = args[2];
-    target_ulong ov_table;
+    target_ulong ov_table; /* Working address in data buffer */
     uint32_t cas_pvr;
-    SpaprOptionVector *ov1_guest, *ov5_guest, *ov5_cas_old;
+    SpaprOptionVector *ov1_guest, *ov5_guest;
     bool guest_radix;
-    Error *local_err = NULL;
     bool raw_mode_supported = false;
     bool guest_xive;
     CPUState *cs;
+    void *fdt;
+    uint32_t max_compat = spapr->max_compat_pvr;
 
     /* CAS is supposed to be called early when only the boot vCPU is active. */
     CPU_FOREACH(cs) {
@@ -1694,16 +1683,22 @@ static target_ulong h_client_architecture_support(PowerPCCPU *cpu,
         }
     }
 
-    cas_pvr = cas_check_pvr(spapr, cpu, &addr, &raw_mode_supported, &local_err);
-    if (local_err) {
-        error_report_err(local_err);
+    cas_pvr = cas_check_pvr(cpu, max_compat, &vec, &raw_mode_supported);
+    if (!cas_pvr && (!raw_mode_supported || max_compat)) {
+        /*
+         * We couldn't find a suitable compatibility mode, and either
+         * the guest doesn't support "raw" mode for this CPU, or "raw"
+         * mode is disabled because a maximum compat mode is set.
+         */
+        error_report("Couldn't negotiate a suitable PVR during CAS");
         return H_HARDWARE;
     }
 
     /* Update CPUs */
     if (cpu->compat_pvr != cas_pvr) {
-        ppc_set_compat_all(cas_pvr, &local_err);
-        if (local_err) {
+        Error *local_err = NULL;
+
+        if (ppc_set_compat_all(cas_pvr, &local_err) < 0) {
             /* We fail to set compat mode (likely because running with KVM PR),
              * but maybe we can fallback to raw mode if the guest supports it.
              */
@@ -1712,12 +1707,11 @@ static target_ulong h_client_architecture_support(PowerPCCPU *cpu,
                 return H_HARDWARE;
             }
             error_free(local_err);
-            local_err = NULL;
         }
     }
 
     /* For the future use: here @ov_table points to the first option vector */
-    ov_table = addr;
+    ov_table = vec;
 
     ov1_guest = spapr_ovec_parse_vector(ov_table, 1);
     if (!ov1_guest) {
@@ -1739,9 +1733,7 @@ static target_ulong h_client_architecture_support(PowerPCCPU *cpu,
         exit(EXIT_FAILURE);
     }
 
-    /* The radix/hash bit in byte 24 requires special handling: */
     guest_radix = spapr_ovec_test(ov5_guest, OV5_MMU_RADIX_300);
-    spapr_ovec_clear(ov5_guest, OV5_MMU_RADIX_300);
 
     guest_xive = spapr_ovec_test(ov5_guest, OV5_XIVE_EXPLOIT);
 
@@ -1782,30 +1774,16 @@ static target_ulong h_client_architecture_support(PowerPCCPU *cpu,
      * by LoPAPR 1.1, 14.5.4.8, which QEMU doesn't implement, we don't need
      * to worry about this for now.
      */
-    ov5_cas_old = spapr_ovec_clone(spapr->ov5_cas);
-
-    /* also clear the radix/hash bit from the current ov5_cas bits to
-     * be in sync with the newly ov5 bits. Else the radix bit will be
-     * seen as being removed and this will generate a reset loop
-     */
-    spapr_ovec_clear(ov5_cas_old, OV5_MMU_RADIX_300);
 
     /* full range of negotiated ov5 capabilities */
     spapr_ovec_intersect(spapr->ov5_cas, spapr->ov5, ov5_guest);
     spapr_ovec_cleanup(ov5_guest);
-    /* capabilities that have been added since CAS-generated guest reset.
-     * if capabilities have since been removed, generate another reset
-     */
-    spapr->cas_reboot = !spapr_ovec_subset(ov5_cas_old, spapr->ov5_cas);
-    spapr_ovec_cleanup(ov5_cas_old);
-    /* Now that processing is finished, set the radix/hash bit for the
-     * guest if it requested a valid mode; otherwise terminate the boot. */
+
     if (guest_radix) {
         if (kvm_enabled() && !kvmppc_has_cap_mmu_radix()) {
             error_report("Guest requested unavailable MMU mode (radix).");
             exit(EXIT_FAILURE);
         }
-        spapr_ovec_set(spapr->ov5_cas, OV5_MMU_RADIX_300);
     } else {
         if (kvm_enabled() && kvmppc_has_cap_mmu_radix()
             && !kvmppc_has_cap_mmu_hash_v3()) {
@@ -1838,80 +1816,57 @@ static target_ulong h_client_architecture_support(PowerPCCPU *cpu,
 
     spapr_handle_transient_dev_before_cas(spapr);
 
-    if (!spapr->cas_reboot) {
-        void *fdt;
-        SpaprDeviceTreeUpdateHeader hdr = { .version_id = 1 };
-
-        /* If spapr_machine_reset() did not set up a HPT but one is necessary
-         * (because the guest isn't going to use radix) then set it up here. */
-        if ((spapr->patb_entry & PATE1_GR) && !guest_radix) {
-            /* legacy hash or new hash: */
-            spapr_setup_hpt(spapr);
-        }
-
-        if (fdt_bufsize < sizeof(hdr)) {
-            error_report("SLOF provided insufficient CAS buffer "
-                         TARGET_FMT_lu " (min: %zu)", fdt_bufsize, sizeof(hdr));
-            exit(EXIT_FAILURE);
-        }
-
-        fdt_bufsize -= sizeof(hdr);
-
-        fdt = spapr_build_fdt(spapr, false, fdt_bufsize);
-        _FDT((fdt_pack(fdt)));
-
-        cpu_physical_memory_write(fdt_buf, &hdr, sizeof(hdr));
-        cpu_physical_memory_write(fdt_buf + sizeof(hdr), fdt,
-                                  fdt_totalsize(fdt));
-        trace_spapr_cas_continue(fdt_totalsize(fdt) + sizeof(hdr));
-
-        g_free(spapr->fdt_blob);
-        spapr->fdt_size = fdt_totalsize(fdt);
-        spapr->fdt_initial_size = spapr->fdt_size;
-        spapr->fdt_blob = fdt;
+    /*
+     * If spapr_machine_reset() did not set up a HPT but one is necessary
+     * (because the guest isn't going to use radix) then set it up here.
+     */
+    if ((spapr->patb_entry & PATE1_GR) && !guest_radix) {
+        /* legacy hash or new hash: */
+        spapr_setup_hpt(spapr);
     }
 
-    if (spapr->cas_reboot) {
-        qemu_system_reset_request(SHUTDOWN_CAUSE_SUBSYSTEM_RESET);
-    }
+    fdt = spapr_build_fdt(spapr, false, fdt_bufsize);
+
+    g_free(spapr->fdt_blob);
+    spapr->fdt_size = fdt_totalsize(fdt);
+    spapr->fdt_initial_size = spapr->fdt_size;
+    spapr->fdt_blob = fdt;
 
     return H_SUCCESS;
 }
 
-static target_ulong h_home_node_associativity(PowerPCCPU *cpu,
-                                              SpaprMachineState *spapr,
-                                              target_ulong opcode,
-                                              target_ulong *args)
+static target_ulong h_client_architecture_support(PowerPCCPU *cpu,
+                                                  SpaprMachineState *spapr,
+                                                  target_ulong opcode,
+                                                  target_ulong *args)
 {
-    target_ulong flags = args[0];
-    target_ulong procno = args[1];
-    PowerPCCPU *tcpu;
-    int idx;
+    target_ulong vec = ppc64_phys_to_real(args[0]);
+    target_ulong fdt_buf = args[1];
+    target_ulong fdt_bufsize = args[2];
+    target_ulong ret;
+    SpaprDeviceTreeUpdateHeader hdr = { .version_id = 1 };
 
-    /* only support procno from H_REGISTER_VPA */
-    if (flags != 0x1) {
-        return H_FUNCTION;
+    if (fdt_bufsize < sizeof(hdr)) {
+        error_report("SLOF provided insufficient CAS buffer "
+                     TARGET_FMT_lu " (min: %zu)", fdt_bufsize, sizeof(hdr));
+        exit(EXIT_FAILURE);
     }
 
-    tcpu = spapr_find_cpu(procno);
-    if (tcpu == NULL) {
-        return H_P2;
+    fdt_bufsize -= sizeof(hdr);
+
+    ret = do_client_architecture_support(cpu, spapr, vec, fdt_bufsize);
+    if (ret == H_SUCCESS) {
+        _FDT((fdt_pack(spapr->fdt_blob)));
+        spapr->fdt_size = fdt_totalsize(spapr->fdt_blob);
+        spapr->fdt_initial_size = spapr->fdt_size;
+
+        cpu_physical_memory_write(fdt_buf, &hdr, sizeof(hdr));
+        cpu_physical_memory_write(fdt_buf + sizeof(hdr), spapr->fdt_blob,
+                                  spapr->fdt_size);
+        trace_spapr_cas_continue(spapr->fdt_size + sizeof(hdr));
     }
 
-    /* sequence is the same as in the "ibm,associativity" property */
-
-    idx = 0;
-#define ASSOCIATIVITY(a, b) (((uint64_t)(a) << 32) | \
-                             ((uint64_t)(b) & 0xffffffff))
-    args[idx++] = ASSOCIATIVITY(0, 0);
-    args[idx++] = ASSOCIATIVITY(0, tcpu->node_id);
-    args[idx++] = ASSOCIATIVITY(procno, -1);
-    for ( ; idx < 6; idx++) {
-        args[idx] = -1;
-    }
-#undef ASSOCIATIVITY
-
-    return H_SUCCESS;
+    return ret;
 }
 
 static target_ulong h_get_cpu_characteristics(PowerPCCPU *cpu,
@@ -2144,10 +2099,6 @@ static void hypercall_register_types(void)
     spapr_register_hypercall(KVMPPC_H_CAS, h_client_architecture_support);
 
     spapr_register_hypercall(KVMPPC_H_UPDATE_DT, h_update_dt);
-
-    /* Virtual Processor Home Node */
-    spapr_register_hypercall(H_HOME_NODE_ASSOCIATIVITY,
-                             h_home_node_associativity);
 }
 
 type_init(hypercall_register_types)

@@ -120,7 +120,8 @@ static QTAILQ_HEAD(, BlockBackend) block_backends =
 static QTAILQ_HEAD(, BlockBackend) monitor_block_backends =
     QTAILQ_HEAD_INITIALIZER(monitor_block_backends);
 
-static void blk_root_inherit_options(int *child_flags, QDict *child_options,
+static void blk_root_inherit_options(BdrvChildRole role, bool parent_is_format,
+                                     int *child_flags, QDict *child_options,
                                      int parent_flags, QDict *parent_options)
 {
     /* We're not supposed to call this function for root nodes */
@@ -297,7 +298,7 @@ static void blk_root_detach(BdrvChild *child)
     }
 }
 
-static const BdrvChildRole child_root = {
+static const BdrvChildClass child_root = {
     .inherit_options    = blk_root_inherit_options,
 
     .change_media       = blk_root_change_media,
@@ -356,6 +357,29 @@ BlockBackend *blk_new(AioContext *ctx, uint64_t perm, uint64_t shared_perm)
 }
 
 /*
+ * Create a new BlockBackend connected to an existing BlockDriverState.
+ *
+ * @perm is a bitmasks of BLK_PERM_* constants which describes the
+ * permissions to request for @bs that is attached to this
+ * BlockBackend.  @shared_perm is a bitmask which describes which
+ * permissions may be granted to other users of the attached node.
+ * Both sets of permissions can be changed later using blk_set_perm().
+ *
+ * Return the new BlockBackend on success, null on failure.
+ */
+BlockBackend *blk_new_with_bs(BlockDriverState *bs, uint64_t perm,
+                              uint64_t shared_perm, Error **errp)
+{
+    BlockBackend *blk = blk_new(bdrv_get_aio_context(bs), perm, shared_perm);
+
+    if (blk_insert_bs(blk, bs, errp) < 0) {
+        blk_unref(blk);
+        return NULL;
+    }
+    return blk;
+}
+
+/*
  * Creates a new BlockBackend, opens a new BlockDriverState, and connects both.
  * The new BlockBackend is in the main AioContext.
  *
@@ -400,8 +424,9 @@ BlockBackend *blk_new_open(const char *filename, const char *reference,
         return NULL;
     }
 
-    blk->root = bdrv_root_attach_child(bs, "root", &child_root, blk->ctx,
-                                       perm, BLK_PERM_ALL, blk, errp);
+    blk->root = bdrv_root_attach_child(bs, "root", &child_root,
+                                       BDRV_CHILD_FILTERED | BDRV_CHILD_PRIMARY,
+                                       blk->ctx, perm, BLK_PERM_ALL, blk, errp);
     if (!blk->root) {
         blk_unref(blk);
         return NULL;
@@ -693,7 +718,7 @@ static BlockBackend *bdrv_first_blk(BlockDriverState *bs)
 {
     BdrvChild *child;
     QLIST_FOREACH(child, &bs->parents, next_parent) {
-        if (child->role == &child_root) {
+        if (child->klass == &child_root) {
             return child->opaque;
         }
     }
@@ -717,7 +742,7 @@ bool bdrv_is_root_node(BlockDriverState *bs)
     BdrvChild *c;
 
     QLIST_FOREACH(c, &bs->parents, next_parent) {
-        if (c->role != &child_root) {
+        if (c->klass != &child_root) {
             return false;
         }
     }
@@ -783,6 +808,7 @@ void blk_remove_bs(BlockBackend *blk)
 {
     ThrottleGroupMember *tgm = &blk->public.throttle_group_member;
     BlockDriverState *bs;
+    BdrvChild *root;
 
     notifier_list_notify(&blk->remove_bs_notifiers, blk);
     if (tgm->throttle_state) {
@@ -800,8 +826,9 @@ void blk_remove_bs(BlockBackend *blk)
      * to avoid that and a potential QEMU crash.
      */
     blk_drain(blk);
-    bdrv_root_unref_child(blk->root);
+    root = blk->root;
     blk->root = NULL;
+    bdrv_root_unref_child(root);
 }
 
 /*
@@ -811,8 +838,10 @@ int blk_insert_bs(BlockBackend *blk, BlockDriverState *bs, Error **errp)
 {
     ThrottleGroupMember *tgm = &blk->public.throttle_group_member;
     bdrv_ref(bs);
-    blk->root = bdrv_root_attach_child(bs, "root", &child_root, blk->ctx,
-                                       blk->perm, blk->shared_perm, blk, errp);
+    blk->root = bdrv_root_attach_child(bs, "root", &child_root,
+                                       BDRV_CHILD_FILTERED | BDRV_CHILD_PRIMARY,
+                                       blk->ctx, blk->perm, blk->shared_perm,
+                                       blk, errp);
     if (blk->root == NULL) {
         return -EPERM;
     }
@@ -1324,12 +1353,12 @@ int blk_make_zero(BlockBackend *blk, BdrvRequestFlags flags)
 
 void blk_inc_in_flight(BlockBackend *blk)
 {
-    atomic_inc(&blk->in_flight);
+    qatomic_inc(&blk->in_flight);
 }
 
 void blk_dec_in_flight(BlockBackend *blk)
 {
-    atomic_dec(&blk->in_flight);
+    qatomic_dec(&blk->in_flight);
     aio_wait_kick();
 }
 
@@ -1365,8 +1394,16 @@ typedef struct BlkAioEmAIOCB {
     bool has_returned;
 } BlkAioEmAIOCB;
 
+static AioContext *blk_aio_em_aiocb_get_aio_context(BlockAIOCB *acb_)
+{
+    BlkAioEmAIOCB *acb = container_of(acb_, BlkAioEmAIOCB, common);
+
+    return blk_get_aio_context(acb->rwco.blk);
+}
+
 static const AIOCBInfo blk_aio_em_aiocb_info = {
     .aiocb_size         = sizeof(BlkAioEmAIOCB),
+    .get_aio_context    = blk_aio_em_aiocb_get_aio_context,
 };
 
 static void blk_aio_complete(BlkAioEmAIOCB *acb)
@@ -1683,7 +1720,7 @@ void blk_drain(BlockBackend *blk)
 
     /* We may have -ENOMEDIUM completions in flight */
     AIO_WAIT_WHILE(blk_get_aio_context(blk),
-                   atomic_mb_read(&blk->in_flight) > 0);
+                   qatomic_mb_read(&blk->in_flight) > 0);
 
     if (bs) {
         bdrv_drained_end(bs);
@@ -1702,7 +1739,7 @@ void blk_drain_all(void)
         aio_context_acquire(ctx);
 
         /* We may have -ENOMEDIUM completions in flight */
-        AIO_WAIT_WHILE(ctx, atomic_mb_read(&blk->in_flight) > 0);
+        AIO_WAIT_WHILE(ctx, qatomic_mb_read(&blk->in_flight) > 0);
 
         aio_context_release(ctx);
     }
@@ -2137,14 +2174,14 @@ int blk_pwrite_compressed(BlockBackend *blk, int64_t offset, const void *buf,
 }
 
 int blk_truncate(BlockBackend *blk, int64_t offset, bool exact,
-                 PreallocMode prealloc, Error **errp)
+                 PreallocMode prealloc, BdrvRequestFlags flags, Error **errp)
 {
     if (!blk_is_available(blk)) {
         error_setg(errp, "No medium inserted");
         return -ENOMEDIUM;
     }
 
-    return bdrv_truncate(blk->root, offset, exact, prealloc, errp);
+    return bdrv_truncate(blk->root, offset, exact, prealloc, flags, errp);
 }
 
 int blk_save_vmstate(BlockBackend *blk, const uint8_t *buf,
@@ -2242,10 +2279,13 @@ int blk_commit_all(void)
 
     while ((blk = blk_all_next(blk)) != NULL) {
         AioContext *aio_context = blk_get_aio_context(blk);
+        BlockDriverState *unfiltered_bs = bdrv_skip_filters(blk_bs(blk));
 
         aio_context_acquire(aio_context);
-        if (blk_is_inserted(blk) && blk->root->bs->backing) {
-            int ret = bdrv_commit(blk->root->bs);
+        if (blk_is_inserted(blk) && bdrv_cow_child(unfiltered_bs)) {
+            int ret;
+
+            ret = bdrv_commit(unfiltered_bs);
             if (ret < 0) {
                 aio_context_release(aio_context);
                 return ret;
@@ -2306,6 +2346,7 @@ void blk_io_limits_update_group(BlockBackend *blk, const char *group)
 static void blk_root_drained_begin(BdrvChild *child)
 {
     BlockBackend *blk = child->opaque;
+    ThrottleGroupMember *tgm = &blk->public.throttle_group_member;
 
     if (++blk->quiesce_counter == 1) {
         if (blk->dev_ops && blk->dev_ops->drained_begin) {
@@ -2316,8 +2357,8 @@ static void blk_root_drained_begin(BdrvChild *child)
     /* Note that blk->root may not be accessible here yet if we are just
      * attaching to a BlockDriverState that is drained. Use child instead. */
 
-    if (atomic_fetch_inc(&blk->public.throttle_group_member.io_limits_disabled) == 0) {
-        throttle_group_restart_tgm(&blk->public.throttle_group_member);
+    if (qatomic_fetch_inc(&tgm->io_limits_disabled) == 0) {
+        throttle_group_restart_tgm(tgm);
     }
 }
 
@@ -2334,7 +2375,7 @@ static void blk_root_drained_end(BdrvChild *child, int *drained_end_counter)
     assert(blk->quiesce_counter);
 
     assert(blk->public.throttle_group_member.io_limits_disabled);
-    atomic_dec(&blk->public.throttle_group_member.io_limits_disabled);
+    qatomic_dec(&blk->public.throttle_group_member.io_limits_disabled);
 
     if (--blk->quiesce_counter == 0) {
         if (blk->dev_ops && blk->dev_ops->drained_end) {
@@ -2378,4 +2419,14 @@ int coroutine_fn blk_co_copy_range(BlockBackend *blk_in, int64_t off_in,
 const BdrvChild *blk_root(BlockBackend *blk)
 {
     return blk->root;
+}
+
+int blk_make_empty(BlockBackend *blk, Error **errp)
+{
+    if (!blk_is_available(blk)) {
+        error_setg(errp, "No medium inserted");
+        return -ENOMEDIUM;
+    }
+
+    return bdrv_make_empty(blk->root, errp);
 }

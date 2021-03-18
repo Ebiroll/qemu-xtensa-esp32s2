@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -24,15 +24,14 @@
 #include "hw/pci/pci.h"
 #include "hw/pci/pci_host.h"
 #include "hw/ppc/xics.h"
+#include "qom/object.h"
 
 #define TYPE_SPAPR_PCI_HOST_BRIDGE "spapr-pci-host-bridge"
 
-#define SPAPR_PCI_HOST_BRIDGE(obj) \
-    OBJECT_CHECK(SpaprPhbState, (obj), TYPE_SPAPR_PCI_HOST_BRIDGE)
+OBJECT_DECLARE_SIMPLE_TYPE(SpaprPhbState, SPAPR_PCI_HOST_BRIDGE)
 
 #define SPAPR_PCI_DMA_MAX_WINDOWS    2
 
-typedef struct SpaprPhbState SpaprPhbState;
 
 typedef struct SpaprPciMsi {
     uint32_t first_irq;
@@ -94,6 +93,7 @@ struct SpaprPhbState {
     hwaddr nv2_gpa_win_addr;
     hwaddr nv2_atsd_win_addr;
     SpaprPhbPciNvGpuConfig *nvgpus;
+    bool pre_5_1_assoc;
 };
 
 #define SPAPR_PCI_MEM_WIN_BUS_OFFSET 0x80000000ULL

@@ -27,6 +27,7 @@
 
 static gboolean uart_transmit(GIOChannel *chan, GIOCondition cond, void *opaque);
 static void uart_receive(void *opaque, const uint8_t *buf, int size);
+static void uart_set_rx_timeout(ESP32UARTState *s);
 
 static uint8_t fifo8_peek(Fifo8 *fifo)
 {
@@ -36,7 +37,7 @@ static uint8_t fifo8_peek(Fifo8 *fifo)
     return fifo->data[fifo->head];
 }
 
-static void esp_uart_update_irq(ESP32UARTState *s)
+static void uart_update_irq(ESP32UARTState *s)
 {
     bool irq = false;
 
@@ -46,11 +47,13 @@ static void esp_uart_update_irq(ESP32UARTState *s)
     uint32_t tx_empty_raw = (fifo8_num_free(&s->tx_fifo) <= tx_empty_threshold);
     uint32_t rx_full_raw = (fifo8_num_used(&s->rx_fifo) >= rx_full_threshold);
     uint32_t tx_done_raw = (fifo8_num_used(&s->tx_fifo) == 0);
+    uint32_t rxfifo_tout_raw = (s->rxfifo_tout) ? 1 : 0;
 
     uint32_t int_raw = s->reg[R_UART_INT_RAW];
     int_raw = FIELD_DP32(int_raw, UART_INT_RAW, RXFIFO_FULL, rx_full_raw);
     int_raw = FIELD_DP32(int_raw, UART_INT_RAW, TXFIFO_EMPTY, tx_empty_raw);
     int_raw = FIELD_DP32(int_raw, UART_INT_RAW, TX_DONE, tx_done_raw);
+    int_raw = FIELD_DP32(int_raw, UART_INT_RAW, RXFIFO_TOUT, rxfifo_tout_raw);
     s->reg[R_UART_INT_RAW] = int_raw;
 
     uint32_t int_st = s->reg[R_UART_INT_RAW] & s->reg[R_UART_INT_ENA];
@@ -72,7 +75,7 @@ static uint64_t uart_read(void *opaque, hwaddr addr, unsigned int size)
             error_report("esp_uart: read UART FIFO while it is empty");
         } else {
             r = fifo8_pop(&s->rx_fifo);
-            esp_uart_update_irq(s);
+            uart_update_irq(s);
             qemu_chr_fe_accept_input(&s->chr);
         }
         break;
@@ -86,6 +89,17 @@ static uint64_t uart_read(void *opaque, hwaddr addr, unsigned int size)
     case A_UART_HIGHPULSE:
         r = 337;  /* FIXME: this should depend on the APB frequency */
         break;
+
+    case A_UART_MEM_RX_STATUS: {
+        uint32_t fifo_size = fifo8_num_used(&s->rx_fifo);
+        /* The software only cares about the differene between WR_ADDR and RD_ADDR;
+         * to keep things simpler, set RD_ADDR to 0 and WR_ADDR to the number of bytes
+         * in the FIFO. 128 is a special case — write and read pointers should be
+         * the same in this case.
+         */
+        r = FIELD_DP32(0, UART_MEM_RX_STATUS, WR_ADDR, (fifo_size == 128) ? 0 : fifo_size);
+        break;
+    }
 
     case A_UART_DATE:
         r = 0x15122500;
@@ -118,15 +132,36 @@ static void uart_write(void *opaque, hwaddr addr,
     case A_UART_INT_CLR:
         s->reg[R_UART_INT_ST] &= ~((uint32_t) value);
         s->reg[addr / 4] = value;
+        if (value & R_UART_INT_CLR_RXFIFO_TOUT_MASK) {
+            s->rxfifo_tout = false;
+        }
         break;
 
     case A_UART_INT_ENA:
         s->reg[addr / 4] = value;
         break;
 
+    case A_UART_CLKDIV: {
+        s->reg[addr / 4] = value;
+        unsigned clkdiv = (FIELD_EX32(s->reg[R_UART_CLKDIV], UART_CLKDIV, CLKDIV) << 4) +
+                          FIELD_EX32(s->reg[R_UART_CLKDIV], UART_CLKDIV, CLKDIV_FRAG);
+        unsigned baud_rate = 115200;
+        if (clkdiv != 0) {
+            /* FIXME: this should depend on the APB frequency */
+            baud_rate = (unsigned) ((40000000ULL << 4) / clkdiv);
+        }
+        s->baud_rate = baud_rate;
+        break;
+    }
+
     case A_UART_AUTOBAUD:
-        s->autobaud_en = FIELD_EX32(value, UART_AUTOBAUD, EN);
-        if (!s->autobaud_en) {
+        /* If autobaud is enabled, pretend that sufficient number of edges on the RXD line
+         * have been received instantly. Autobaud is only used in the ROM bootloader,
+         * and it doesn't care if the result is ready immediately.
+         */
+        if (FIELD_EX32(value, UART_AUTOBAUD, EN)) {
+            s->reg[R_UART_RXD_CNT] = 0x3FF;
+        } else {
             s->reg[R_UART_RXD_CNT] = 0;
         }
         s->reg[addr / 4] = value;
@@ -138,6 +173,12 @@ static void uart_write(void *opaque, hwaddr addr,
         /* no-op */
         break;
 
+    case A_UART_CONF1:
+        s->reg[addr / 4] = value;
+        uart_set_rx_timeout(s);
+        uart_update_irq(s);
+        break;
+
     default:
         if (addr > sizeof(s->reg)) {
             error_report("esp_uart: write to addr=0x%x out of bounds\n", (uint32_t) addr);
@@ -147,7 +188,7 @@ static void uart_write(void *opaque, hwaddr addr,
         break;
 
     }
-    esp_uart_update_irq(s);
+    uart_update_irq(s);
 }
 
 
@@ -156,6 +197,12 @@ static gboolean uart_transmit(GIOChannel *chan, GIOCondition cond, void *opaque)
     ESP32UARTState *s = ESP32_UART(opaque);
 
     s->tx_watch_handle = 0;
+
+    /* drain the fifo instantly, if the char device backend is not connected */
+    if (!qemu_chr_fe_backend_open(&s->chr)) {
+        fifo8_reset(&s->tx_fifo);
+        return FALSE;
+    }
 
     while (fifo8_num_used(&s->tx_fifo) > 0) {
         uint8_t b = fifo8_peek(&s->tx_fifo);
@@ -169,7 +216,7 @@ static gboolean uart_transmit(GIOChannel *chan, GIOCondition cond, void *opaque)
         }
     }
 
-    esp_uart_update_irq(s);
+    uart_update_irq(s);
 
     return FALSE;
 }
@@ -182,25 +229,59 @@ static void uart_receive(void *opaque, const uint8_t *buf, int size)
         return;
     }
 
-    for (int i = 0; i < size && fifo8_num_free(&s->rx_fifo) > 0; i++) {
-        fifo8_push(&s->rx_fifo, buf[i]);
-
-        if (s->autobaud_en) {
-            s->reg[R_UART_RXD_CNT] += __builtin_popcount(buf[i]) + 1;
-        }
+    /* If we can receive anything: cancel any pending RX timeout timer,
+     * and clear the receive timeout flag.
+     */
+    if (fifo8_num_free(&s->rx_fifo) > 0) {
+        timer_del(&s->rx_timeout_timer);
+        s->rxfifo_tout = false;
     }
 
+    /* Move the data into the FIFO */
+    for (int i = 0; i < size && fifo8_num_free(&s->rx_fifo) > 0; i++) {
+        fifo8_push(&s->rx_fifo, buf[i]);
+    }
+
+    /* Receive throttling: some applications (in particular the ESP32 ROM bootloader)
+     * may work incorrectly if the data comes in much faster than what UART baud rate
+     * would allow. This code adds a delay every UART_FIFO_LENGTH bytes, to make the
+     * average data rate match the configured baud rate.
+     * This doesn't need to be very precise, so only add the delay if the FIFO is full
+     * (which most likely means that more data will come).
+     */
     if (fifo8_is_full(&s->rx_fifo)) {
         s->throttle_rx = true;
         const int bits_per_symbol = 10;
-        const int baud_rate = 115200; /* FIXME: get from the divider register */
-        uint64_t throttle_time_ns = (uint64_t) UART_FIFO_LENGTH * bits_per_symbol * NANOSECONDS_PER_SECOND / baud_rate;
+        int64_t throttle_time_ns = (int64_t) UART_FIFO_LENGTH * bits_per_symbol * NANOSECONDS_PER_SECOND / s->baud_rate;
         timer_mod_ns(&s->throttle_timer,
                      qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
                      throttle_time_ns);
     }
 
-    esp_uart_update_irq(s);
+    uart_set_rx_timeout(s);
+    uart_update_irq(s);
+}
+
+static void uart_set_rx_timeout(ESP32UARTState *s)
+{
+    if (FIELD_EX32(s->reg[R_UART_CONF1], UART_CONF1, TOUT_EN)) {
+        unsigned threshold_reg = FIELD_EX32(s->reg[R_UART_CONF1], UART_CONF1, TOUT_THRD);
+        /* On the ESP32, threshold_reg is in units of (bit_time * 8).
+         * Note this is different on later chips.
+         */
+        int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+        int64_t rx_timeout_ns = now + threshold_reg * 8 * NANOSECONDS_PER_SECOND / s->baud_rate;
+        /* If throttling is done, make sure timeout doesn't happen before more data
+         * is allowed to come. Offset it by 1ms.
+         */
+        if (rx_timeout_ns <= s->throttle_timer.expire_time) {
+            rx_timeout_ns = s->throttle_timer.expire_time + 10000000;
+        }
+        timer_mod_ns(&s->rx_timeout_timer, rx_timeout_ns);
+    } else {
+        timer_del(&s->rx_timeout_timer);
+        s->rxfifo_tout = false;
+    }
 }
 
 static int uart_can_receive(void *opaque)
@@ -225,17 +306,26 @@ static void uart_throttle_timer_cb(void* opaque)
     qemu_chr_fe_accept_input(&s->chr);
 }
 
+static void uart_rx_timeout_timer_cb(void* opaque)
+{
+    ESP32UARTState *s = ESP32_UART(opaque);
+    s->rxfifo_tout = true;
+    uart_update_irq(s);
+}
+
 static void esp32_uart_reset(DeviceState *dev)
 {
     ESP32UARTState *s = ESP32_UART(dev);
 
     memset(s->reg, 0, sizeof(s->reg));
-    s->autobaud_en = false;
     s->reg[R_UART_RXD_CNT] = 0;
     s->reg[R_UART_INT_ST] = 0;
     s->reg[R_UART_INT_RAW] = 0;
     s->reg[R_UART_INT_ENA] = 0;
     s->reg[R_UART_AUTOBAUD] = 0;
+    /* Default baud rate divider after reset */
+    s->reg[R_UART_CLKDIV] = FIELD_DP32(0, UART_CLKDIV, CLKDIV, 0x2B6);
+    s->baud_rate = 115200;
     fifo8_reset(&s->tx_fifo);
     fifo8_reset(&s->rx_fifo);
     if (s->tx_watch_handle) {
@@ -275,6 +365,7 @@ static void esp32_uart_init(Object *obj)
     fifo8_create(&s->tx_fifo, UART_FIFO_LENGTH);
     fifo8_create(&s->rx_fifo, UART_FIFO_LENGTH);
     timer_init_ns(&s->throttle_timer, QEMU_CLOCK_VIRTUAL, uart_throttle_timer_cb, s);
+    timer_init_ns(&s->rx_timeout_timer, QEMU_CLOCK_VIRTUAL, uart_rx_timeout_timer_cb, s);
 }
 
 

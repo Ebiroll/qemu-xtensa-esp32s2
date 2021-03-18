@@ -35,6 +35,7 @@ config PC
     select ACPI_PCI
     select ACPI_VMGENID
     select VIRTIO_PMEM_SUPPORTED
+    select VIRTIO_MEM_SUPPORTED
 
 config PC_PCI
     bool
@@ -102,6 +103,9 @@ config MICROVM
     select I8259
     select MC146818RTC
     select VIRTIO_MMIO
+    select ACPI_HW_REDUCED
+    select PCI_EXPRESS_GENERIC_BRIDGE
+    select USB_XHCI_SYSBUS
 
 config X86_IOMMU
     bool

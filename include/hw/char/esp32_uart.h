@@ -63,6 +63,10 @@ REG32(UART_CONF1, 0x24)
     FIELD(UART_CONF1, TXFIFO_EMPTY_THRD, 8, 7)
     FIELD(UART_CONF1, RXFIFO_FULL_THRD, 0, 7)
 
+REG32(UART_MEM_RX_STATUS, 0x60);
+    FIELD(UART_MEM_RX_STATUS, RD_ADDR, 2, 11);
+    FIELD(UART_MEM_RX_STATUS, WR_ADDR, 13, 11);
+
 REG32(UART_DATE, 0x78)
 
 /* Size of the register file */
@@ -76,13 +80,15 @@ typedef struct ESPUARTState {
     CharBackend chr;
     qemu_irq irq;
     QEMUTimer throttle_timer;
+    QEMUTimer rx_timeout_timer;
     bool throttle_rx;
+    bool rxfifo_tout;
+    unsigned baud_rate;
 
     Fifo8 rx_fifo;
     Fifo8 tx_fifo;
     guint tx_watch_handle;
 
     uint32_t reg[UART_REG_CNT];
-    bool autobaud_en;
 } ESP32UARTState;
 

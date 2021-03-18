@@ -28,6 +28,7 @@
 #include "migration/vmstate.h"
 #include "desc.h"
 #include "qemu/units.h"
+#include "qom/object.h"
 
 /* ----------------------------------------------------------------------- */
 
@@ -237,7 +238,7 @@ typedef struct {
 } QEMU_PACKED ObjectInfo;
 
 #define TYPE_USB_MTP "usb-mtp"
-#define USB_MTP(obj) OBJECT_CHECK(MTPState, (obj), TYPE_USB_MTP)
+OBJECT_DECLARE_SIMPLE_TYPE(MTPState, USB_MTP)
 
 #define QEMU_STORAGE_ID 0x00010001
 
@@ -631,9 +632,9 @@ static void usb_mtp_object_readdir(MTPState *s, MTPObject *o)
         int64_t id = qemu_file_monitor_add_watch(s->file_monitor, o->path, NULL,
                                                  file_monitor_event, s, &err);
         if (id == -1) {
-            error_report("usb-mtp: failed to add watch for %s: %s", o->path,
-                         error_get_pretty(err));
-            error_free(err);
+            error_reportf_err(err,
+                              "usb-mtp: failed to add watch for %s: ",
+                              o->path);
         } else {
             trace_usb_mtp_file_monitor_event(s->dev.addr, o->path,
                                              "Watch Added");
@@ -1276,9 +1277,8 @@ static void usb_mtp_command(MTPState *s, MTPControl *c)
 
         s->file_monitor = qemu_file_monitor_new(&err);
         if (err) {
-            error_report("usb-mtp: file monitoring init failed: %s",
-                         error_get_pretty(err));
-            error_free(err);
+            error_reportf_err(err,
+                              "usb-mtp: file monitoring init failed: ");
         } else {
             QTAILQ_INIT(&s->events);
         }

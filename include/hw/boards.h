@@ -21,12 +21,7 @@
 
 #define TYPE_MACHINE "machine"
 #undef MACHINE  /* BSD defines it and QEMU does not use it */
-#define MACHINE(obj) \
-    OBJECT_CHECK(MachineState, (obj), TYPE_MACHINE)
-#define MACHINE_GET_CLASS(obj) \
-    OBJECT_GET_CLASS(MachineClass, (obj), TYPE_MACHINE)
-#define MACHINE_CLASS(klass) \
-    OBJECT_CLASS_CHECK(MachineClass, (klass), TYPE_MACHINE)
+OBJECT_DECLARE_TYPE(MachineState, MachineClass, MACHINE)
 
 extern MachineState *current_machine;
 
@@ -173,7 +168,6 @@ struct MachineClass {
     void (*init)(MachineState *state);
     void (*reset)(MachineState *state);
     void (*wakeup)(MachineState *state);
-    void (*hot_add_cpu)(MachineState *state, const int64_t id, Error **errp);
     int (*kvm_type)(MachineState *machine, const char *arg);
     void (*smp_parse)(MachineState *ms, QemuOpts *opts);
 
@@ -207,8 +201,7 @@ struct MachineClass {
     const char **valid_cpu_types;
     strList *allowed_dynamic_sysbus_devices;
     bool auto_enable_numa_with_memhp;
-    void (*numa_auto_assign_ram)(MachineClass *mc, NodeInfo *nodes,
-                                 int nb_nodes, ram_addr_t size);
+    bool auto_enable_numa_with_memdev;
     bool ignore_boot_device_suffixes;
     bool smbus_no_migration_support;
     bool nvdimm_supported;
@@ -275,7 +268,6 @@ struct MachineState {
     char *firmware;
     bool iommu;
     bool suppress_vmdesc;
-    bool enforce_config_section;
     bool enable_graphics;
     char *memory_encryption;
     char *ram_memdev_id;
@@ -317,6 +309,12 @@ struct MachineState {
         type_register_static(&machine_initfn##_typeinfo); \
     } \
     type_init(machine_initfn##_register_types)
+
+extern GlobalProperty hw_compat_5_1[];
+extern const size_t hw_compat_5_1_len;
+
+extern GlobalProperty hw_compat_5_0[];
+extern const size_t hw_compat_5_0_len;
 
 extern GlobalProperty hw_compat_4_2[];
 extern const size_t hw_compat_4_2_len;

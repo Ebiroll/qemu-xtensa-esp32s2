@@ -29,6 +29,7 @@
 #include "hw/pci/pci.h"
 #endif
 #include "qapi/qapi-commands-machine-target.h"
+#include "hw/s390x/pv.h"
 
 #define CPUDEF_INIT(_type, _gen, _ec_ga, _mha_pow, _hmfai, _name, _desc) \
     {                                                                    \
@@ -237,6 +238,9 @@ bool s390_has_feat(S390Feat feat)
             return true;
         }
         return 0;
+    }
+    if (feat == S390_FEAT_DIAG_318 && s390_is_pv()) {
+        return false;
     }
     return test_bit(feat, cpu->model->features);
 }
@@ -510,21 +514,18 @@ static void cpu_model_from_info(S390CPUModel *model, const CpuModelInfo *info,
 
     if (qdict) {
         visitor = qobject_input_visitor_new(info->props);
-        visit_start_struct(visitor, NULL, NULL, 0, &err);
-        if (err) {
-            error_propagate(errp, err);
+        if (!visit_start_struct(visitor, NULL, NULL, 0, errp)) {
             visit_free(visitor);
             object_unref(obj);
             return;
         }
         for (e = qdict_first(qdict); e; e = qdict_next(qdict, e)) {
-            object_property_set(obj, visitor, e->key, &err);
-            if (err) {
+            if (!object_property_set(obj, e->key, visitor, &err)) {
                 break;
             }
         }
         if (!err) {
-            visit_check_struct(visitor, errp);
+            visit_check_struct(visitor, &err);
         }
         visit_end_struct(visitor, NULL);
         visit_free(visitor);
@@ -827,6 +828,7 @@ static void check_consistency(const S390CPUModel *model)
         { S390_FEAT_PTFF_STOE, S390_FEAT_MULTIPLE_EPOCH },
         { S390_FEAT_PTFF_STOUE, S390_FEAT_MULTIPLE_EPOCH },
         { S390_FEAT_AP_QUEUE_INTERRUPT_CONTROL, S390_FEAT_AP },
+        { S390_FEAT_DIAG_318, S390_FEAT_EXTENDED_LENGTH_SCCB },
     };
     int i;
 
@@ -984,7 +986,7 @@ void s390_realize_cpu_model(CPUState *cs, Error **errp)
 static void get_feature(Object *obj, Visitor *v, const char *name,
                         void *opaque, Error **errp)
 {
-    S390Feat feat = (S390Feat) opaque;
+    S390Feat feat = (S390Feat) (uintptr_t) opaque;
     S390CPU *cpu = S390_CPU(obj);
     bool value;
 
@@ -1001,8 +1003,7 @@ static void get_feature(Object *obj, Visitor *v, const char *name,
 static void set_feature(Object *obj, Visitor *v, const char *name,
                         void *opaque, Error **errp)
 {
-    Error *err = NULL;
-    S390Feat feat = (S390Feat) opaque;
+    S390Feat feat = (S390Feat) (uintptr_t) opaque;
     DeviceState *dev = DEVICE(obj);
     S390CPU *cpu = S390_CPU(obj);
     bool value;
@@ -1017,9 +1018,7 @@ static void set_feature(Object *obj, Visitor *v, const char *name,
         return;
     }
 
-    visit_type_bool(v, name, &value, &err);
-    if (err) {
-        error_propagate(errp, err);
+    if (!visit_type_bool(v, name, &value, errp)) {
         return;
     }
     if (value) {
@@ -1038,7 +1037,7 @@ static void set_feature(Object *obj, Visitor *v, const char *name,
 static void get_feature_group(Object *obj, Visitor *v, const char *name,
                               void *opaque, Error **errp)
 {
-    S390FeatGroup group = (S390FeatGroup) opaque;
+    S390FeatGroup group = (S390FeatGroup) (uintptr_t) opaque;
     const S390FeatGroupDef *def = s390_feat_group_def(group);
     S390CPU *cpu = S390_CPU(obj);
     S390FeatBitmap tmp;
@@ -1059,8 +1058,7 @@ static void get_feature_group(Object *obj, Visitor *v, const char *name,
 static void set_feature_group(Object *obj, Visitor *v, const char *name,
                               void *opaque, Error **errp)
 {
-    Error *err = NULL;
-    S390FeatGroup group = (S390FeatGroup) opaque;
+    S390FeatGroup group = (S390FeatGroup) (uintptr_t) opaque;
     const S390FeatGroupDef *def = s390_feat_group_def(group);
     DeviceState *dev = DEVICE(obj);
     S390CPU *cpu = S390_CPU(obj);
@@ -1076,9 +1074,7 @@ static void set_feature_group(Object *obj, Visitor *v, const char *name,
         return;
     }
 
-    visit_type_bool(v, name, &value, &err);
-    if (err) {
-        error_propagate(errp, err);
+    if (!visit_type_bool(v, name, &value, errp)) {
         return;
     }
     if (value) {
@@ -1095,25 +1091,6 @@ static void set_feature_group(Object *obj, Visitor *v, const char *name,
     } else {
         bitmap_andnot(cpu->model->features, cpu->model->features, def->feat,
                       S390_FEAT_MAX);
-    }
-}
-
-void s390_cpu_model_register_props(Object *obj)
-{
-    S390FeatGroup group;
-    S390Feat feat;
-
-    for (feat = 0; feat < S390_FEAT_MAX; feat++) {
-        const S390FeatDef *def = s390_feat_def(feat);
-        object_property_add(obj, def->name, "bool", get_feature,
-                            set_feature, NULL, (void *) feat, NULL);
-        object_property_set_description(obj, def->name, def->desc , NULL);
-    }
-    for (group = 0; group < S390_FEAT_GROUP_MAX; group++) {
-        const S390FeatGroupDef *def = s390_feat_group_def(group);
-        object_property_add(obj, def->name, "bool", get_feature_group,
-                            set_feature_group, NULL, (void *) group, NULL);
-        object_property_set_description(obj, def->name, def->desc , NULL);
     }
 }
 
@@ -1224,12 +1201,27 @@ static char *get_description(Object *obj, Error **errp)
 
 void s390_cpu_model_class_register_props(ObjectClass *oc)
 {
+    S390FeatGroup group;
+    S390Feat feat;
+
     object_class_property_add_bool(oc, "migration-safe", get_is_migration_safe,
-                                   NULL, NULL);
+                                   NULL);
     object_class_property_add_bool(oc, "static", get_is_static,
-                                   NULL, NULL);
-    object_class_property_add_str(oc, "description", get_description, NULL,
-                                  NULL);
+                                   NULL);
+    object_class_property_add_str(oc, "description", get_description, NULL);
+
+    for (feat = 0; feat < S390_FEAT_MAX; feat++) {
+        const S390FeatDef *def = s390_feat_def(feat);
+        object_class_property_add(oc, def->name, "bool", get_feature,
+                                  set_feature, NULL, (void *) feat);
+        object_class_property_set_description(oc, def->name, def->desc);
+    }
+    for (group = 0; group < S390_FEAT_GROUP_MAX; group++) {
+        const S390FeatGroupDef *def = s390_feat_group_def(group);
+        object_class_property_add(oc, def->name, "bool", get_feature_group,
+                                  set_feature_group, NULL, (void *) group);
+        object_class_property_set_description(oc, def->name, def->desc);
+    }
 }
 
 #ifdef CONFIG_KVM

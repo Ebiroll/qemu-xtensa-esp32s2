@@ -382,9 +382,7 @@ vub_get_features(VuDev *dev)
                1ull << VIRTIO_BLK_F_DISCARD |
                1ull << VIRTIO_BLK_F_WRITE_ZEROES |
                #endif
-               1ull << VIRTIO_BLK_F_CONFIG_WCE |
-               1ull << VIRTIO_F_VERSION_1 |
-               1ull << VHOST_USER_F_PROTOCOL_FEATURES;
+               1ull << VIRTIO_BLK_F_CONFIG_WCE;
 
     if (vdev_blk->enable_ro) {
         features |= 1ull << VIRTIO_BLK_F_RO;
@@ -405,6 +403,8 @@ vub_get_config(VuDev *vu_dev, uint8_t *config, uint32_t len)
 {
     VugDev *gdev;
     VubDev *vdev_blk;
+
+    g_return_val_if_fail(len <= sizeof(struct virtio_blk_config), -1);
 
     gdev = container_of(vu_dev, VugDev, parent);
     vdev_blk = container_of(gdev, VubDev, parent);
@@ -476,7 +476,7 @@ static int unix_sock_new(char *unix_fn)
     assert(unix_fn);
 
     sock = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (sock <= 0) {
+    if (sock < 0) {
         perror("socket");
         return -1;
     }

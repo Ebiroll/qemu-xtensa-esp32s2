@@ -6,7 +6,7 @@ config ARM_VIRT
     imply VFIO_PLATFORM
     imply VFIO_XGMAC
     imply TPM_TIS_SYSBUS
-    select A15MPCORE
+    select ARM_GIC
     select ACPI
     select ARM_SMMUV3
     select GPIO_KEY
@@ -25,6 +25,8 @@ config ARM_VIRT
     select DIMM
     select ACPI_MEMORY_HOTPLUG
     select ACPI_HW_REDUCED
+    select ACPI_NVDIMM
+    select ACPI_APEI
 
 config CHEETAH
     bool
@@ -58,7 +60,7 @@ config HIGHBANK
     select ARM_TIMER # sp804
     select ARM_V7M
     select PL011 # UART
-    select PL022 # Serial port
+    select PL022 # SPI
     select PL031 # RTC
     select PL061 # GPIO
     select PL310 # cache controller
@@ -92,6 +94,7 @@ config MUSCA
 
 config MUSICPAL
     bool
+    select OR_IRQ
     select BITBANG_I2C
     select MARVELL_88W8618
     select PTIMER
@@ -149,6 +152,7 @@ config TOSA
     select ZAURUS  # scoop
     select MICRODRIVE
     select PXA2XX
+    select LED
 
 config SPITZ
     bool
@@ -209,6 +213,7 @@ config SBSA_REF
     select PL031 # RTC
     select PL061 # GPIO
     select USB_EHCI_SYSBUS
+    select WDT_SBSA
 
 config SABRELITE
     bool
@@ -221,7 +226,7 @@ config STELLARIS
     select CMSDK_APB_WATCHDOG
     select I2C
     select PL011 # UART
-    select PL022 # Serial port
+    select PL022 # SPI
     select PL061 # GPIO
     select SSD0303 # OLED display
     select SSD0323 # OLED display
@@ -287,6 +292,7 @@ config ZYNQ
 
 config ARM_V7M
     bool
+    select PTIMER
 
 config ALLWINNER_A10
     bool
@@ -314,6 +320,7 @@ config RASPI
     select FRAMEBUFFER
     select PL011 # UART
     select SDHCI
+    select USB_DWC2
 
 config STM32F205_SOC
     bool
@@ -353,11 +360,21 @@ config XLNX_VERSAL
     select VIRTIO_MMIO
     select UNIMP
 
+config NPCM7XX
+    bool
+    select A9MPCORE
+    select ARM_GIC
+    select PL310  # cache controller
+    select SERIAL
+    select SSI
+    select UNIMP
+
 config FSL_IMX25
     bool
     select IMX
     select IMX_FEC
     select IMX_I2C
+    select WDT_IMX2
     select DS1338
 
 config FSL_IMX31
@@ -365,6 +382,7 @@ config FSL_IMX31
     select SERIAL
     select IMX
     select IMX_I2C
+    select WDT_IMX2
     select LAN9118
 
 config FSL_IMX6
@@ -374,6 +392,7 @@ config FSL_IMX6
     select IMX_FEC
     select IMX_I2C
     select IMX_USBPHY
+    select WDT_IMX2
     select SDHCI
 
 config ASPEED_SOC
@@ -389,6 +408,7 @@ config ASPEED_SOC
     select TMP105
     select TMP421
     select UNIMP
+    select LED
 
 config MPS2
     bool
@@ -397,10 +417,12 @@ config MPS2
     select MPS2_FPGAIO
     select MPS2_SCC
     select OR_IRQ
-    select PL022    # Serial port
+    select PL022    # SPI
     select PL080    # DMA controller
     select SPLIT_IRQ
     select UNIMP
+    select CMSDK_APB_WATCHDOG
+    select VERSATILE_I2C
 
 config FSL_IMX7
     bool
@@ -411,6 +433,7 @@ config FSL_IMX7
     select IMX
     select IMX_FEC
     select IMX_I2C
+    select WDT_IMX2
     select PCI_EXPRESS_DESIGNWARE
     select SDHCI
     select UNIMP
@@ -424,6 +447,7 @@ config FSL_IMX6UL
     select IMX
     select IMX_FEC
     select IMX_I2C
+    select WDT_IMX2
     select SDHCI
     select UNIMP
 

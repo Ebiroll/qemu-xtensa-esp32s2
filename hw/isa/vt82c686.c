@@ -23,9 +23,11 @@
 #include "hw/isa/apm.h"
 #include "hw/acpi/acpi.h"
 #include "hw/i2c/pm_smbus.h"
+#include "qapi/error.h"
 #include "qemu/module.h"
 #include "qemu/timer.h"
 #include "exec/address-spaces.h"
+#include "qom/object.h"
 
 /* #define DEBUG_VT82C686B */
 
@@ -41,15 +43,14 @@ typedef struct SuperIOConfig {
     uint8_t data;
 } SuperIOConfig;
 
-typedef struct VT82C686BState {
+struct VT82C686BState {
     PCIDevice dev;
     MemoryRegion superio;
     SuperIOConfig superio_conf;
-} VT82C686BState;
+};
 
 #define TYPE_VT82C686B_DEVICE "VT82C686B"
-#define VT82C686B_DEVICE(obj) \
-    OBJECT_CHECK(VT82C686BState, (obj), TYPE_VT82C686B_DEVICE)
+OBJECT_DECLARE_SIMPLE_TYPE(VT82C686BState, VT82C686B_DEVICE)
 
 static void superio_ioport_writeb(void *opaque, hwaddr addr, uint64_t data,
                                   unsigned size)
@@ -158,34 +159,31 @@ static void vt82c686b_write_config(PCIDevice *d, uint32_t address,
 
 #define ACPI_DBG_IO_ADDR  0xb044
 
-typedef struct VT686PMState {
+struct VT686PMState {
     PCIDevice dev;
     MemoryRegion io;
     ACPIREGS ar;
     APMState apm;
     PMSMBus smb;
     uint32_t smb_io_base;
-} VT686PMState;
+};
 
-typedef struct VT686AC97State {
+struct VT686AC97State {
     PCIDevice dev;
-} VT686AC97State;
+};
 
-typedef struct VT686MC97State {
+struct VT686MC97State {
     PCIDevice dev;
-} VT686MC97State;
+};
 
 #define TYPE_VT82C686B_PM_DEVICE "VT82C686B_PM"
-#define VT82C686B_PM_DEVICE(obj) \
-    OBJECT_CHECK(VT686PMState, (obj), TYPE_VT82C686B_PM_DEVICE)
+OBJECT_DECLARE_SIMPLE_TYPE(VT686PMState, VT82C686B_PM_DEVICE)
 
 #define TYPE_VT82C686B_MC97_DEVICE "VT82C686B_MC97"
-#define VT82C686B_MC97_DEVICE(obj) \
-    OBJECT_CHECK(VT686MC97State, (obj), TYPE_VT82C686B_MC97_DEVICE)
+OBJECT_DECLARE_SIMPLE_TYPE(VT686MC97State, VT82C686B_MC97_DEVICE)
 
 #define TYPE_VT82C686B_AC97_DEVICE "VT82C686B_AC97"
-#define VT82C686B_AC97_DEVICE(obj) \
-    OBJECT_CHECK(VT686AC97State, (obj), TYPE_VT82C686B_AC97_DEVICE)
+OBJECT_DECLARE_SIMPLE_TYPE(VT686AC97State, VT82C686B_AC97_DEVICE)
 
 static void pm_update_sci(VT686PMState *s)
 {
@@ -276,8 +274,8 @@ void vt82c686b_ac97_init(PCIBus *bus, int devfn)
 {
     PCIDevice *dev;
 
-    dev = pci_create(bus, devfn, TYPE_VT82C686B_AC97_DEVICE);
-    qdev_init_nofail(&dev->qdev);
+    dev = pci_new(devfn, TYPE_VT82C686B_AC97_DEVICE);
+    pci_realize_and_unref(dev, bus, &error_fatal);
 }
 
 static void via_ac97_class_init(ObjectClass *klass, void *data)
@@ -320,8 +318,8 @@ void vt82c686b_mc97_init(PCIBus *bus, int devfn)
 {
     PCIDevice *dev;
 
-    dev = pci_create(bus, devfn, TYPE_VT82C686B_MC97_DEVICE);
-    qdev_init_nofail(&dev->qdev);
+    dev = pci_new(devfn, TYPE_VT82C686B_MC97_DEVICE);
+    pci_realize_and_unref(dev, bus, &error_fatal);
 }
 
 static void via_mc97_class_init(ObjectClass *klass, void *data)
@@ -388,12 +386,12 @@ I2CBus *vt82c686b_pm_init(PCIBus *bus, int devfn, uint32_t smb_io_base,
     PCIDevice *dev;
     VT686PMState *s;
 
-    dev = pci_create(bus, devfn, TYPE_VT82C686B_PM_DEVICE);
+    dev = pci_new(devfn, TYPE_VT82C686B_PM_DEVICE);
     qdev_prop_set_uint32(&dev->qdev, "smb_io_base", smb_io_base);
 
     s = VT82C686B_PM_DEVICE(dev);
 
-    qdev_init_nofail(&dev->qdev);
+    pci_realize_and_unref(dev, bus, &error_fatal);
 
     return s->smb.smbus;
 }
@@ -503,7 +501,7 @@ static void via_class_init(ObjectClass *klass, void *data)
     dc->vmsd = &vmstate_via;
     /*
      * Reason: part of VIA VT82C686 southbridge, needs to be wired up,
-     * e.g. by mips_fulong2e_init()
+     * e.g. by mips_fuloong2e_init()
      */
     dc->user_creatable = false;
 }

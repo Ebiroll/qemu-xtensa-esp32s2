@@ -1,4 +1,5 @@
 # -*- Mode: Python -*-
+# vim: filetype=python
 #
 
 ##
@@ -97,7 +98,8 @@
 #
 ##
 { 'command': 'screendump',
-  'data': {'filename': 'str', '*device': 'str', '*head': 'int'} }
+  'data': {'filename': 'str', '*device': 'str', '*head': 'int'},
+  'coroutine': true }
 
 ##
 # == Spice
@@ -1081,8 +1083,8 @@
  # Since: 3.0
  #
  ##
- { 'enum'    : 'DisplayGLMode',
-   'data'    : [ 'off', 'on', 'core', 'es' ] }
+{ 'enum'    : 'DisplayGLMode',
+  'data'    : [ 'off', 'on', 'core', 'es' ] }
 
 ##
 # @DisplayCurses:

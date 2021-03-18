@@ -393,7 +393,7 @@ is identical on the wire to:
  { 'enum': 'Enum', 'data': ['one', 'two'] }
  { 'struct': 'Branch1', 'data': { 'data': 'str' } }
  { 'struct': 'Branch2', 'data': { 'data': 'int' } }
- { 'union': 'Flat': 'base': { 'type': 'Enum' }, 'discriminator': 'type',
+ { 'union': 'Flat', 'base': { 'type': 'Enum' }, 'discriminator': 'type',
    'data': { 'one': 'Branch1', 'two': 'Branch2' } }
 
 The optional 'if' member specifies a conditional.  See "Configuring
@@ -472,6 +472,7 @@ Syntax:
                 '*gen': false,
                 '*allow-oob': true,
                 '*allow-preconfig': true,
+                '*coroutine': true,
                 '*if': COND,
                 '*features': FEATURES }
 
@@ -589,12 +590,42 @@ When in doubt, do not implement OOB execution support.
 Member 'allow-preconfig' declares whether the command is available
 before the machine is built.  It defaults to false.  For example:
 
+ { 'enum': 'QMPCapability',
+   'data': [ 'oob' ] }
  { 'command': 'qmp_capabilities',
    'data': { '*enable': [ 'QMPCapability' ] },
    'allow-preconfig': true }
 
 QMP is available before the machine is built only when QEMU was
 started with --preconfig.
+
+Member 'coroutine' tells the QMP dispatcher whether the command handler
+is safe to be run in a coroutine.  It defaults to false.  If it is true,
+the command handler is called from coroutine context and may yield while
+waiting for an external event (such as I/O completion) in order to avoid
+blocking the guest and other background operations.
+
+Coroutine safety can be hard to prove, similar to thread safety.  Common
+pitfalls are:
+
+- The global mutex isn't held across qemu_coroutine_yield(), so
+  operations that used to assume that they execute atomically may have
+  to be more careful to protect against changes in the global state.
+
+- Nested event loops (AIO_WAIT_WHILE() etc.) are problematic in
+  coroutine context and can easily lead to deadlocks.  They should be
+  replaced by yielding and reentering the coroutine when the condition
+  becomes false.
+
+Since the command handler may assume coroutine context, any callers
+other than the QMP dispatcher must also call it in coroutine context.
+In particular, HMP commands calling such a QMP command handler must be
+marked .coroutine = true in hmp-commands.hx.
+
+It is an error to specify both 'coroutine': true and 'allow-oob': true
+for a command.  We don't currently have a use case for both together and
+without a use case, it's not entirely clear what the semantics should
+be.
 
 The optional 'if' member specifies a conditional.  See "Configuring
 the schema" below for more on this.
@@ -795,7 +826,7 @@ Example: a struct with conditional feature 'allow-negative-numbers'
 { 'struct': 'TestType',
   'data': { 'number': 'int' },
   'features': [ { 'name': 'allow-negative-numbers',
-                  'if' 'defined(IFCOND)' } ] }
+                  'if': 'defined(IFCOND)' } ] }
 
 Please note that you are responsible to ensure that the C code will
 compile with an arbitrary combination of conditions, since the
@@ -824,21 +855,37 @@ See below for more on definition documentation.
 Free-form documentation may be used to provide additional text and
 structuring content.
 
+==== Headings and subheadings ====
+
+A free-form documentation comment containing a line which starts with
+some '=' symbols and then a space defines a section heading:
+
+    ##
+    # = This is a top level heading
+    #
+    # This is a free-form comment which will go under the
+    # top level heading.
+    ##
+
+    ##
+    # == This is a second level heading
+    ##
+
+A heading line must be the first line of the documentation
+comment block.
+
+Section headings must always be correctly nested, so you can only
+define a third-level heading inside a second-level heading, and so on.
 
 ==== Documentation markup ====
 
-Comment text starting with '=' is a section title:
+Documentation comments can use most rST markup.  In particular,
+a '::' literal block can be used for examples:
 
-    # = Section title
-
-Double the '=' for a subsection title:
-
-    # == Subsection title
-
-'|' denotes examples:
-
-    # | Text of the example, may span
-    # | multiple lines
+    # ::
+    #
+    #   Text of the example, may span
+    #   multiple lines
 
 '*' starts an itemized list:
 
@@ -854,34 +901,33 @@ A decimal number followed by '.' starts a numbered list:
     #    multiple lines
     # 2. Second item
 
-The actual number doesn't matter.  You could even use '*' instead of
-'2.' for the second item.
+The actual number doesn't matter.
 
-Lists can't be nested.  Blank lines are currently not supported within
-lists.
+Lists of either kind must be preceded and followed by a blank line.
+If a list item's text spans multiple lines, then the second and
+subsequent lines must be correctly indented to line up with the
+first character of the first line.
 
-Additional whitespace between the initial '#' and the comment text is
-permitted.
-
-*foo* and _foo_ are for strong and emphasis styles respectively (they
-do not work over multiple lines).  @foo is used to reference a name in
-the schema.
+The usual '**strong**', '*emphasised*' and '``literal``' markup should
+be used.  If you need a single literal '*' you will need to
+backslash-escape it.  As an extension beyond the usual rST syntax, you
+can also use '@foo' to reference a name in the schema; this is
+rendered the same way as '``foo``'.
 
 Example:
 
 ##
-# = Section
-# == Subsection
-#
-# Some text foo with *strong* and _emphasis_
+# Some text foo with **bold** and *emphasis*
 # 1. with a list
 # 2. like that
 #
 # And some code:
-# | $ echo foo
-# | -> do this
-# | <- get that
 #
+# ::
+#
+#   $ echo foo
+#   -> do this
+#   <- get that
 ##
 
 
@@ -899,6 +945,22 @@ commands and events), member (for structs and unions), branch (for
 alternates), or value (for enums), and finally optional tagged
 sections.
 
+Descriptions of arguments can span multiple lines.  The description
+text can start on the line following the '@argname:', in which case it
+must not be indented at all.  It can also start on the same line as
+the '@argname:'.  In this case if it spans multiple lines then second
+and subsequent lines must be indented to line up with the first
+character of the first line of the description:
+
+# @argone:
+# This is a two line description
+# in the first style.
+#
+# @argtwo: This is a two line description
+#          in the second style.
+
+The number of spaces between the ':' and the text is not significant.
+
 FIXME: the parser accepts these things in almost any order.
 FIXME: union branches should be described, too.
 
@@ -909,8 +971,25 @@ A tagged section starts with one of the following words:
 "Note:"/"Notes:", "Since:", "Example"/"Examples", "Returns:", "TODO:".
 The section ends with the start of a new section.
 
+The text of a section can start on a new line, in
+which case it must not be indented at all.  It can also start
+on the same line as the 'Note:', 'Returns:', etc tag.  In this
+case if it spans multiple lines then second and subsequent
+lines must be indented to match the first, in the same way as
+multiline argument descriptions.
+
 A 'Since: x.y.z' tagged section lists the release that introduced the
 definition.
+
+The text of a section can start on a new line, in
+which case it must not be indented at all.  It can also start
+on the same line as the 'Note:', 'Returns:', etc tag.  In this
+case if it spans multiple lines then second and subsequent
+lines must be indented to match the first.
+
+An 'Example' or 'Examples' section is automatically rendered
+entirely as literal fixed-width text.  In other sections,
+the text is formatted, and rST markup can be used.
 
 For example:
 
@@ -1321,6 +1400,7 @@ Example:
     };
 
     void qapi_free_UserDefOne(UserDefOne *obj);
+    G_DEFINE_AUTOPTR_CLEANUP_FUNC(UserDefOne, qapi_free_UserDefOne)
 
     struct UserDefOneList {
         UserDefOneList *next;
@@ -1328,6 +1408,7 @@ Example:
     };
 
     void qapi_free_UserDefOneList(UserDefOneList *obj);
+    G_DEFINE_AUTOPTR_CLEANUP_FUNC(UserDefOneList, qapi_free_UserDefOneList)
 
     struct q_obj_my_command_arg {
         UserDefOneList *arg1;
@@ -1408,103 +1489,87 @@ Example:
     #include "example-qapi-types.h"
 
 
-    void visit_type_UserDefOne_members(Visitor *v, UserDefOne *obj, Error **errp);
-    void visit_type_UserDefOne(Visitor *v, const char *name, UserDefOne **obj, Error **errp);
-    void visit_type_UserDefOneList(Visitor *v, const char *name, UserDefOneList **obj, Error **errp);
+    bool visit_type_UserDefOne_members(Visitor *v, UserDefOne *obj, Error **errp);
+    bool visit_type_UserDefOne(Visitor *v, const char *name, UserDefOne **obj, Error **errp);
+    bool visit_type_UserDefOneList(Visitor *v, const char *name, UserDefOneList **obj, Error **errp);
 
-    void visit_type_q_obj_my_command_arg_members(Visitor *v, q_obj_my_command_arg *obj, Error **errp);
+    bool visit_type_q_obj_my_command_arg_members(Visitor *v, q_obj_my_command_arg *obj, Error **errp);
 
     #endif /* EXAMPLE_QAPI_VISIT_H */
     $ cat qapi-generated/example-qapi-visit.c
 [Uninteresting stuff omitted...]
 
-    void visit_type_UserDefOne_members(Visitor *v, UserDefOne *obj, Error **errp)
+    bool visit_type_UserDefOne_members(Visitor *v, UserDefOne *obj, Error **errp)
     {
-        Error *err = NULL;
-
-        visit_type_int(v, "integer", &obj->integer, &err);
-        if (err) {
-            goto out;
+        if (!visit_type_int(v, "integer", &obj->integer, errp)) {
+            return false;
         }
         if (visit_optional(v, "string", &obj->has_string)) {
-            visit_type_str(v, "string", &obj->string, &err);
-            if (err) {
-                goto out;
+            if (!visit_type_str(v, "string", &obj->string, errp)) {
+                return false;
             }
         }
-
-    out:
-        error_propagate(errp, err);
+        return true;
     }
 
-    void visit_type_UserDefOne(Visitor *v, const char *name, UserDefOne **obj, Error **errp)
+    bool visit_type_UserDefOne(Visitor *v, const char *name, UserDefOne **obj, Error **errp)
     {
-        Error *err = NULL;
+        bool ok = false;
 
-        visit_start_struct(v, name, (void **)obj, sizeof(UserDefOne), &err);
-        if (err) {
-            goto out;
+        if (!visit_start_struct(v, name, (void **)obj, sizeof(UserDefOne), errp)) {
+            return false;
         }
         if (!*obj) {
+            /* incomplete */
+            assert(visit_is_dealloc(v));
             goto out_obj;
         }
-        visit_type_UserDefOne_members(v, *obj, &err);
-        if (err) {
+        if (!visit_type_UserDefOne_members(v, *obj, errp)) {
             goto out_obj;
         }
-        visit_check_struct(v, &err);
+        ok = visit_check_struct(v, errp);
     out_obj:
         visit_end_struct(v, (void **)obj);
-        if (err && visit_is_input(v)) {
+        if (!ok && visit_is_input(v)) {
             qapi_free_UserDefOne(*obj);
             *obj = NULL;
         }
-    out:
-        error_propagate(errp, err);
+        return ok;
     }
 
-    void visit_type_UserDefOneList(Visitor *v, const char *name, UserDefOneList **obj, Error **errp)
+    bool visit_type_UserDefOneList(Visitor *v, const char *name, UserDefOneList **obj, Error **errp)
     {
-        Error *err = NULL;
+        bool ok = false;
         UserDefOneList *tail;
         size_t size = sizeof(**obj);
 
-        visit_start_list(v, name, (GenericList **)obj, size, &err);
-        if (err) {
-            goto out;
+        if (!visit_start_list(v, name, (GenericList **)obj, size, errp)) {
+            return false;
         }
 
         for (tail = *obj; tail;
              tail = (UserDefOneList *)visit_next_list(v, (GenericList *)tail, size)) {
-            visit_type_UserDefOne(v, NULL, &tail->value, &err);
-            if (err) {
-                break;
+            if (!visit_type_UserDefOne(v, NULL, &tail->value, errp)) {
+                goto out_obj;
             }
         }
 
-        if (!err) {
-            visit_check_list(v, &err);
-        }
+        ok = visit_check_list(v, errp);
+    out_obj:
         visit_end_list(v, (void **)obj);
-        if (err && visit_is_input(v)) {
+        if (!ok && visit_is_input(v)) {
             qapi_free_UserDefOneList(*obj);
             *obj = NULL;
         }
-    out:
-        error_propagate(errp, err);
+        return ok;
     }
 
-    void visit_type_q_obj_my_command_arg_members(Visitor *v, q_obj_my_command_arg *obj, Error **errp)
+    bool visit_type_q_obj_my_command_arg_members(Visitor *v, q_obj_my_command_arg *obj, Error **errp)
     {
-        Error *err = NULL;
-
-        visit_type_UserDefOneList(v, "arg1", &obj->arg1, &err);
-        if (err) {
-            goto out;
+        if (!visit_type_UserDefOneList(v, "arg1", &obj->arg1, errp)) {
+            return false;
         }
-
-    out:
-        error_propagate(errp, err);
+        return true;
     }
 
 [Uninteresting stuff omitted...]
@@ -1559,15 +1624,12 @@ Example:
 
     static void qmp_marshal_output_UserDefOne(UserDefOne *ret_in, QObject **ret_out, Error **errp)
     {
-        Error *err = NULL;
         Visitor *v;
 
         v = qobject_output_visitor_new(ret_out);
-        visit_type_UserDefOne(v, "unused", &ret_in, &err);
-        if (!err) {
+        if (visit_type_UserDefOne(v, "unused", &ret_in, errp)) {
             visit_complete(v, ret_out);
         }
-        error_propagate(errp, err);
         visit_free(v);
         v = qapi_dealloc_visitor_new();
         visit_type_UserDefOne(v, "unused", &ret_in, NULL);
@@ -1577,33 +1639,32 @@ Example:
     void qmp_marshal_my_command(QDict *args, QObject **ret, Error **errp)
     {
         Error *err = NULL;
-        UserDefOne *retval;
+        bool ok = false;
         Visitor *v;
+        UserDefOne *retval;
         q_obj_my_command_arg arg = {0};
 
         v = qobject_input_visitor_new(QOBJECT(args));
-        visit_start_struct(v, NULL, NULL, 0, &err);
-        if (err) {
+        if (!visit_start_struct(v, NULL, NULL, 0, errp)) {
             goto out;
         }
-        visit_type_q_obj_my_command_arg_members(v, &arg, &err);
-        if (!err) {
-            visit_check_struct(v, &err);
+        if (visit_type_q_obj_my_command_arg_members(v, &arg, errp)) {
+            ok = visit_check_struct(v, errp);
         }
         visit_end_struct(v, NULL);
-        if (err) {
+        if (!ok) {
             goto out;
         }
 
         retval = qmp_my_command(arg.arg1, &err);
+        error_propagate(errp, err);
         if (err) {
             goto out;
         }
 
-        qmp_marshal_output_UserDefOne(retval, ret, &err);
+        qmp_marshal_output_UserDefOne(retval, ret, errp);
 
     out:
-        error_propagate(errp, err);
         visit_free(v);
         v = qapi_dealloc_visitor_new();
         visit_start_struct(v, NULL, NULL, 0, NULL);
@@ -1611,6 +1672,7 @@ Example:
         visit_end_struct(v, NULL);
         visit_free(v);
     }
+
 [Uninteresting stuff omitted...]
     $ cat qapi-generated/example-qapi-init-commands.h
 [Uninteresting stuff omitted...]

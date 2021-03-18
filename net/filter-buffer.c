@@ -18,16 +18,15 @@
 
 #define TYPE_FILTER_BUFFER "filter-buffer"
 
-#define FILTER_BUFFER(obj) \
-    OBJECT_CHECK(FilterBufferState, (obj), TYPE_FILTER_BUFFER)
+OBJECT_DECLARE_SIMPLE_TYPE(FilterBufferState, FILTER_BUFFER)
 
-typedef struct FilterBufferState {
+struct FilterBufferState {
     NetFilterState parent_obj;
 
     NetQueue *incoming_queue;
     uint32_t interval;
     QEMUTimer release_timer;
-} FilterBufferState;
+};
 
 static void filter_buffer_flush(NetFilterState *nf)
 {
@@ -170,29 +169,24 @@ static void filter_buffer_set_interval(Object *obj, Visitor *v,
                                        Error **errp)
 {
     FilterBufferState *s = FILTER_BUFFER(obj);
-    Error *local_err = NULL;
     uint32_t value;
 
-    visit_type_uint32(v, name, &value, &local_err);
-    if (local_err) {
-        goto out;
+    if (!visit_type_uint32(v, name, &value, errp)) {
+        return;
     }
     if (!value) {
-        error_setg(&local_err, "Property '%s.%s' requires a positive value",
+        error_setg(errp, "Property '%s.%s' requires a positive value",
                    object_get_typename(obj), name);
-        goto out;
+        return;
     }
     s->interval = value;
-
-out:
-    error_propagate(errp, local_err);
 }
 
 static void filter_buffer_init(Object *obj)
 {
     object_property_add(obj, "interval", "uint32",
                         filter_buffer_get_interval,
-                        filter_buffer_set_interval, NULL, NULL, NULL);
+                        filter_buffer_set_interval, NULL, NULL);
 }
 
 static const TypeInfo filter_buffer_info = {

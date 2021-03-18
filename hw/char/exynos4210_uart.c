@@ -22,6 +22,7 @@
 #include "qemu/osdep.h"
 #include "hw/sysbus.h"
 #include "migration/vmstate.h"
+#include "qapi/error.h"
 #include "qemu/error-report.h"
 #include "qemu/module.h"
 #include "qemu/timer.h"
@@ -33,6 +34,7 @@
 #include "hw/qdev-properties.h"
 
 #include "trace.h"
+#include "qom/object.h"
 
 /*
  *  Offsets for UART registers relative to SFR base address
@@ -137,10 +139,9 @@ typedef struct {
 } Exynos4210UartFIFO;
 
 #define TYPE_EXYNOS4210_UART "exynos4210.uart"
-#define EXYNOS4210_UART(obj) \
-    OBJECT_CHECK(Exynos4210UartState, (obj), TYPE_EXYNOS4210_UART)
+OBJECT_DECLARE_SIMPLE_TYPE(Exynos4210UartState, EXYNOS4210_UART)
 
-typedef struct Exynos4210UartState {
+struct Exynos4210UartState {
     SysBusDevice parent_obj;
 
     MemoryRegion iomem;
@@ -158,7 +159,7 @@ typedef struct Exynos4210UartState {
 
     uint32_t channel;
 
-} Exynos4210UartState;
+};
 
 
 /* Used only for tracing */
@@ -652,7 +653,7 @@ DeviceState *exynos4210_uart_create(hwaddr addr,
     DeviceState  *dev;
     SysBusDevice *bus;
 
-    dev = qdev_create(NULL, TYPE_EXYNOS4210_UART);
+    dev = qdev_new(TYPE_EXYNOS4210_UART);
 
     qdev_prop_set_chr(dev, "chardev", chr);
     qdev_prop_set_uint32(dev, "channel", channel);
@@ -660,7 +661,7 @@ DeviceState *exynos4210_uart_create(hwaddr addr,
     qdev_prop_set_uint32(dev, "tx-size", fifo_size);
 
     bus = SYS_BUS_DEVICE(dev);
-    qdev_init_nofail(dev);
+    sysbus_realize_and_unref(bus, &error_fatal);
     if (addr != (hwaddr)-1) {
         sysbus_mmio_map(bus, 0, addr);
     }

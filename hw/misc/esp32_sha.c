@@ -68,6 +68,14 @@ static void esp32_sha_update_text(Esp32ShaState* s, QCryptoHashAlgorithm hash_al
     s->full_text_len += block_len_bytes;
 }
 
+static void esp32_sha_cleanup(Esp32ShaState *s)
+{
+    g_free(s->full_text);
+    s->full_text = NULL;
+    s->full_text_len = 0;
+    s->full_text_reserved = 0;
+}
+
 static void esp32_sha_finish(Esp32ShaState *s, QCryptoHashAlgorithm hash_alg)
 {
     /* ESP32 SHA accelerator accepts padded blocks (doesn't do any extra padding), but
@@ -91,10 +99,6 @@ static void esp32_sha_finish(Esp32ShaState *s, QCryptoHashAlgorithm hash_alg)
             esp32_sha_text_reg_byteswap_to(s, (uint32_t*) s->text, result_len/4);
         }
     }
-    g_free(s->full_text);
-    s->full_text = NULL;
-    s->full_text_len = 0;
-    s->full_text_reserved = 0;
 }
 
 static uint64_t esp32_sha_read(void *opaque, hwaddr addr, unsigned int size)
@@ -118,12 +122,14 @@ static void esp32_sha_write(void *opaque, hwaddr addr,
         s->text[addr / sizeof(uint32_t)] = value;
         break;
     case A_SHA1_START:
-    case A_SHA1_CONTINUE:
     case A_SHA256_START:
-    case A_SHA256_CONTINUE:
     case A_SHA384_START:
-    case A_SHA384_CONTINUE:
     case A_SHA512_START:
+        esp32_sha_cleanup(s);
+        /* fall through */
+    case A_SHA1_CONTINUE:
+    case A_SHA256_CONTINUE:
+    case A_SHA384_CONTINUE:
     case A_SHA512_CONTINUE:
         esp32_sha_update_text(s, algorithm_for_addr(addr));
         break;
@@ -145,10 +151,7 @@ static const MemoryRegionOps esp32_sha_ops = {
 static void esp32_sha_reset(DeviceState *dev)
 {
     Esp32ShaState *s = ESP32_SHA(dev);
-    g_free(s->full_text);
-    s->full_text = NULL;
-    s->full_text_len = 0;
-    s->full_text_reserved = 0;
+    esp32_sha_cleanup(s);
 }
 
 static void esp32_sha_init(Object *obj)

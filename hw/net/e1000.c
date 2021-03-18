@@ -13,7 +13,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -39,6 +39,7 @@
 
 #include "e1000x_common.h"
 #include "trace.h"
+#include "qom/object.h"
 
 static const uint8_t bcast[] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
 
@@ -76,7 +77,7 @@ static int debugflags = DBGBIT(TXERR) | DBGBIT(GENERAL);
  *  Others never tested
  */
 
-typedef struct E1000State_st {
+struct E1000State_st {
     /*< private >*/
     PCIDevice parent_obj;
     /*< public >*/
@@ -137,24 +138,22 @@ typedef struct E1000State_st {
     bool received_tx_tso;
     bool use_tso_for_migration;
     e1000x_txd_props mig_props;
-} E1000State;
+};
+typedef struct E1000State_st E1000State;
 
 #define chkflag(x)     (s->compat_flags & E1000_FLAG_##x)
 
-typedef struct E1000BaseClass {
+struct E1000BaseClass {
     PCIDeviceClass parent_class;
     uint16_t phy_id2;
-} E1000BaseClass;
+};
+typedef struct E1000BaseClass E1000BaseClass;
 
 #define TYPE_E1000_BASE "e1000-base"
 
-#define E1000(obj) \
-    OBJECT_CHECK(E1000State, (obj), TYPE_E1000_BASE)
+DECLARE_OBJ_CHECKERS(E1000State, E1000BaseClass,
+                     E1000, TYPE_E1000_BASE)
 
-#define E1000_DEVICE_CLASS(klass) \
-     OBJECT_CLASS_CHECK(E1000BaseClass, (klass), TYPE_E1000_BASE)
-#define E1000_DEVICE_GET_CLASS(obj) \
-    OBJECT_GET_CLASS(E1000BaseClass, (obj), TYPE_E1000_BASE)
 
 static void
 e1000_link_up(E1000State *s)
@@ -365,7 +364,7 @@ e1000_autoneg_timer(void *opaque)
 static void e1000_reset(void *opaque)
 {
     E1000State *d = opaque;
-    E1000BaseClass *edc = E1000_DEVICE_GET_CLASS(d);
+    E1000BaseClass *edc = E1000_GET_CLASS(d);
     uint8_t *macaddr = d->conf.macaddr.a;
 
     timer_del(d->autoneg_timer);
@@ -1751,7 +1750,7 @@ static void e1000_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
-    E1000BaseClass *e = E1000_DEVICE_CLASS(klass);
+    E1000BaseClass *e = E1000_CLASS(klass);
     const E1000Info *info = data;
 
     k->realize = pci_e1000_realize;
@@ -1774,7 +1773,7 @@ static void e1000_instance_init(Object *obj)
     E1000State *n = E1000(obj);
     device_add_bootindex_property(obj, &n->conf.bootindex,
                                   "bootindex", "/ethernet-phy@0",
-                                  DEVICE(n), NULL);
+                                  DEVICE(n));
 }
 
 static const TypeInfo e1000_base_info = {
@@ -1824,7 +1823,6 @@ static void e1000_register_types(void)
         type_info.parent = TYPE_E1000_BASE;
         type_info.class_data = (void *)info;
         type_info.class_init = e1000_class_init;
-        type_info.instance_init = e1000_instance_init;
 
         type_register(&type_info);
     }

@@ -20,7 +20,7 @@
 
 static const XtensaOpcodeTranslators* esp32_opcode_translators[] = {
     &xtensa_core_opcodes,
-    &xtensa_fpu2000_opcodes,
+    &xtensa_fpu_opcodes,
     NULL
 };
 

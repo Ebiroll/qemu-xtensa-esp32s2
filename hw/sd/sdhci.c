@@ -1,6 +1,8 @@
 /*
  * SD Association Host Standard Specification v2.0 controller emulation
  *
+ * Datasheet: PartA2_SD_Host_Controller_Simplified_Specification_Ver2.00.pdf
+ *
  * Copyright (c) 2011 Samsung Electronics Co., Ltd.
  * Mitsyanko Igor <i.mitsyanko@samsung.com>
  * Peter A.G. Crosthwaite <peter.crosthwaite@petalogix.com>
@@ -37,9 +39,12 @@
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "trace.h"
+#include "qom/object.h"
 
 #define TYPE_SDHCI_BUS "sdhci-bus"
-#define SDHCI_BUS(obj) OBJECT_CHECK(SDBus, (obj), TYPE_SDHCI_BUS)
+/* This is reusing the SDBus typedef from SD_BUS */
+DECLARE_INSTANCE_CHECKER(SDBus, SDHCI_BUS,
+                         TYPE_SDHCI_BUS)
 
 #define MASKED_WRITE(reg, mask, val)  (reg = (reg & (mask)) | (val))
 
@@ -213,9 +218,14 @@ static uint8_t sdhci_slotint(SDHCIState *s)
          ((s->norintsts & SDHC_NIS_REMOVE) && (s->wakcon & SDHC_WKUP_ON_RMV));
 }
 
-static inline void sdhci_update_irq(SDHCIState *s)
+/* Return true if IRQ was pending and delivered */
+static bool sdhci_update_irq(SDHCIState *s)
 {
-    qemu_set_irq(s->irq, sdhci_slotint(s));
+    bool pending = sdhci_slotint(s);
+
+    qemu_set_irq(s->irq, pending);
+
+    return pending;
 }
 
 static void sdhci_raise_insertion_irq(void *opaque)
@@ -399,8 +409,6 @@ static void sdhci_end_transfer(SDHCIState *s)
 /* Fill host controller's read buffer with BLKSIZE bytes of data from card */
 static void sdhci_read_block_from_card(SDHCIState *s)
 {
-    int index = 0;
-    uint8_t data;
     const uint16_t blk_size = s->blksize & BLOCK_SIZE_MASK;
 
     if ((s->trnmod & SDHC_TRNS_MULTI) &&
@@ -408,12 +416,9 @@ static void sdhci_read_block_from_card(SDHCIState *s)
         return;
     }
 
-    for (index = 0; index < blk_size; index++) {
-        data = sdbus_read_data(&s->sdbus);
-        if (!FIELD_EX32(s->hostctl2, SDHC_HOSTCTL2, EXECUTE_TUNING)) {
-            /* Device is not in tuning */
-            s->fifo_buffer[index] = data;
-        }
+    if (!FIELD_EX32(s->hostctl2, SDHC_HOSTCTL2, EXECUTE_TUNING)) {
+        /* Device is not in tuning */
+        sdbus_read_data(&s->sdbus, s->fifo_buffer, blk_size);
     }
 
     if (FIELD_EX32(s->hostctl2, SDHC_HOSTCTL2, EXECUTE_TUNING)) {
@@ -496,8 +501,6 @@ static uint32_t sdhci_read_dataport(SDHCIState *s, unsigned size)
 /* Write data from host controller FIFO to card */
 static void sdhci_write_block_to_card(SDHCIState *s)
 {
-    int index = 0;
-
     if (s->prnsts & SDHC_SPACE_AVAILABLE) {
         if (s->norintstsen & SDHC_NISEN_WBUFRDY) {
             s->norintsts |= SDHC_NIS_WBUFRDY;
@@ -514,9 +517,7 @@ static void sdhci_write_block_to_card(SDHCIState *s)
         }
     }
 
-    for (index = 0; index < (s->blksize & BLOCK_SIZE_MASK); index++) {
-        sdbus_write_data(&s->sdbus, s->fifo_buffer[index]);
-    }
+    sdbus_write_data(&s->sdbus, s->fifo_buffer, s->blksize & BLOCK_SIZE_MASK);
 
     /* Next data can be written through BUFFER DATORT register */
     s->prnsts |= SDHC_SPACE_AVAILABLE;
@@ -578,7 +579,7 @@ static void sdhci_write_dataport(SDHCIState *s, uint32_t value, unsigned size)
 static void sdhci_sdma_transfer_multi_blocks(SDHCIState *s)
 {
     bool page_aligned = false;
-    unsigned int n, begin;
+    unsigned int begin;
     const uint16_t block_size = s->blksize & BLOCK_SIZE_MASK;
     uint32_t boundary_chk = 1 << (((s->blksize & ~BLOCK_SIZE_MASK) >> 12) + 12);
     uint32_t boundary_count = boundary_chk - (s->sdmasysad % boundary_chk);
@@ -600,9 +601,7 @@ static void sdhci_sdma_transfer_multi_blocks(SDHCIState *s)
                 SDHC_DAT_LINE_ACTIVE;
         while (s->blkcnt) {
             if (s->data_count == 0) {
-                for (n = 0; n < block_size; n++) {
-                    s->fifo_buffer[n] = sdbus_read_data(&s->sdbus);
-                }
+                sdbus_read_data(&s->sdbus, s->fifo_buffer, block_size);
             }
             begin = s->data_count;
             if (((boundary_count + begin) < block_size) && page_aligned) {
@@ -641,9 +640,7 @@ static void sdhci_sdma_transfer_multi_blocks(SDHCIState *s)
                             &s->fifo_buffer[begin], s->data_count - begin);
             s->sdmasysad += s->data_count - begin;
             if (s->data_count == block_size) {
-                for (n = 0; n < block_size; n++) {
-                    sdbus_write_data(&s->sdbus, s->fifo_buffer[n]);
-                }
+                sdbus_write_data(&s->sdbus, s->fifo_buffer, block_size);
                 s->data_count = 0;
                 if (s->trnmod & SDHC_TRNS_BLK_CNT_EN) {
                     s->blkcnt--;
@@ -668,19 +665,14 @@ static void sdhci_sdma_transfer_multi_blocks(SDHCIState *s)
 /* single block SDMA transfer */
 static void sdhci_sdma_transfer_single_block(SDHCIState *s)
 {
-    int n;
     uint32_t datacnt = s->blksize & BLOCK_SIZE_MASK;
 
     if (s->trnmod & SDHC_TRNS_READ) {
-        for (n = 0; n < datacnt; n++) {
-            s->fifo_buffer[n] = sdbus_read_data(&s->sdbus);
-        }
+        sdbus_read_data(&s->sdbus, s->fifo_buffer, datacnt);
         dma_memory_write(s->dma_as, s->sdmasysad, s->fifo_buffer, datacnt);
     } else {
         dma_memory_read(s->dma_as, s->sdmasysad, s->fifo_buffer, datacnt);
-        for (n = 0; n < datacnt; n++) {
-            sdbus_write_data(&s->sdbus, s->fifo_buffer[n]);
-        }
+        sdbus_write_data(&s->sdbus, s->fifo_buffer, datacnt);
     }
     s->blkcnt--;
 
@@ -739,10 +731,16 @@ static void get_adma_description(SDHCIState *s, ADMADescr *dscr)
 
 static void sdhci_do_adma(SDHCIState *s)
 {
-    unsigned int n, begin, length;
+    unsigned int begin, length;
     const uint16_t block_size = s->blksize & BLOCK_SIZE_MASK;
     ADMADescr dscr = {};
     int i;
+
+    if (s->trnmod & SDHC_TRNS_BLK_CNT_EN && !s->blkcnt) {
+        /* Stop Multiple Transfer */
+        sdhci_end_transfer(s);
+        return;
+    }
 
     for (i = 0; i < SDHC_ADMA_DESCS_PER_DELAY; ++i) {
         s->admaerr &= ~SDHC_ADMAERR_LENGTH_MISMATCH;
@@ -769,13 +767,10 @@ static void sdhci_do_adma(SDHCIState *s)
 
         switch (dscr.attr & SDHC_ADMA_ATTR_ACT_MASK) {
         case SDHC_ADMA_ATTR_ACT_TRAN:  /* data transfer */
-
             if (s->trnmod & SDHC_TRNS_READ) {
                 while (length) {
                     if (s->data_count == 0) {
-                        for (n = 0; n < block_size; n++) {
-                            s->fifo_buffer[n] = sdbus_read_data(&s->sdbus);
-                        }
+                        sdbus_read_data(&s->sdbus, s->fifo_buffer, block_size);
                     }
                     begin = s->data_count;
                     if ((length + begin) < block_size) {
@@ -814,9 +809,7 @@ static void sdhci_do_adma(SDHCIState *s)
                                     s->data_count - begin);
                     dscr.addr += s->data_count - begin;
                     if (s->data_count == block_size) {
-                        for (n = 0; n < block_size; n++) {
-                            sdbus_write_data(&s->sdbus, s->fifo_buffer[n]);
-                        }
+                        sdbus_write_data(&s->sdbus, s->fifo_buffer, block_size);
                         s->data_count = 0;
                         if (s->trnmod & SDHC_TRNS_BLK_CNT_EN) {
                             s->blkcnt--;
@@ -844,7 +837,10 @@ static void sdhci_do_adma(SDHCIState *s)
                 s->norintsts |= SDHC_NIS_DMA;
             }
 
-            sdhci_update_irq(s);
+            if (sdhci_update_irq(s) && !(dscr.attr & SDHC_ADMA_ATTR_END)) {
+                /* IRQ delivered, reschedule current transfer */
+                break;
+            }
         }
 
         /* ADMA transfer terminates if blkcnt == 0 or by END attribute */
@@ -960,10 +956,20 @@ sdhci_buff_access_is_sequential(SDHCIState *s, unsigned byte_num)
     return true;
 }
 
+static void sdhci_resume_pending_transfer(SDHCIState *s)
+{
+    timer_del(s->transfer_timer);
+    sdhci_data_transfer(s);
+}
+
 static uint64_t sdhci_read(void *opaque, hwaddr offset, unsigned size)
 {
     SDHCIState *s = (SDHCIState *)opaque;
     uint32_t ret = 0;
+
+    if (timer_pending(s->transfer_timer)) {
+        sdhci_resume_pending_transfer(s);
+    }
 
     switch (offset & ~0x3) {
     case SDHC_SYSAD:
@@ -1108,6 +1114,10 @@ sdhci_write(void *opaque, hwaddr offset, uint64_t val, unsigned size)
     uint32_t value = val;
     value <<= shift;
 
+    if (timer_pending(s->transfer_timer)) {
+        sdhci_resume_pending_transfer(s);
+    }
+
     switch (offset & ~0x3) {
     case SDHC_SYSAD:
         s->sdmasysad = (s->sdmasysad & mask) | value;
@@ -1124,14 +1134,14 @@ sdhci_write(void *opaque, hwaddr offset, uint64_t val, unsigned size)
         break;
     case SDHC_BLKSIZE:
         if (!TRANSFERRING_DATA(s->prnsts)) {
-            MASKED_WRITE(s->blksize, mask, value);
+            MASKED_WRITE(s->blksize, mask, extract32(value, 0, 12));
             MASKED_WRITE(s->blkcnt, mask >> 16, value >> 16);
         }
 
         /* Limit block size to the maximum buffer size */
         if (extract32(s->blksize, 0, 12) > s->buf_maxsz) {
-            qemu_log_mask(LOG_GUEST_ERROR, "%s: Size 0x%x is larger than " \
-                          "the maximum buffer 0x%x", __func__, s->blksize,
+            qemu_log_mask(LOG_GUEST_ERROR, "%s: Size 0x%x is larger than "
+                          "the maximum buffer 0x%x\n", __func__, s->blksize,
                           s->buf_maxsz);
 
             s->blksize = deposit32(s->blksize, 0, 12, s->buf_maxsz);
@@ -1288,7 +1298,7 @@ static const MemoryRegionOps sdhci_mmio_ops = {
 
 static void sdhci_init_readonly_registers(SDHCIState *s, Error **errp)
 {
-    Error *local_err = NULL;
+    ERRP_GUARD();
 
     switch (s->sd_spec_version) {
     case 2 ... 3:
@@ -1299,9 +1309,8 @@ static void sdhci_init_readonly_registers(SDHCIState *s, Error **errp)
     }
     s->version = (SDHC_HCVER_VENDOR << 8) | (s->sd_spec_version - 1);
 
-    sdhci_check_capareg(s, &local_err);
-    if (local_err) {
-        error_propagate(errp, local_err);
+    sdhci_check_capareg(s, errp);
+    if (*errp) {
         return;
     }
 }
@@ -1332,11 +1341,10 @@ void sdhci_uninitfn(SDHCIState *s)
 
 void sdhci_common_realize(SDHCIState *s, Error **errp)
 {
-    Error *local_err = NULL;
+    ERRP_GUARD();
 
-    sdhci_init_readonly_registers(s, &local_err);
-    if (local_err) {
-        error_propagate(errp, local_err);
+    sdhci_init_readonly_registers(s, errp);
+    if (*errp) {
         return;
     }
     s->buf_maxsz = sdhci_get_fifolen(s);
@@ -1346,7 +1354,7 @@ void sdhci_common_realize(SDHCIState *s, Error **errp)
                           SDHC_REGISTERS_MAP_SIZE);
 }
 
-void sdhci_common_unrealize(SDHCIState *s, Error **errp)
+void sdhci_common_unrealize(SDHCIState *s)
 {
     /* This function is expected to be called only once for each class:
      * - SysBus:    via DeviceClass->unrealize(),
@@ -1456,13 +1464,12 @@ static void sdhci_sysbus_finalize(Object *obj)
 
 static void sdhci_sysbus_realize(DeviceState *dev, Error **errp)
 {
+    ERRP_GUARD();
     SDHCIState *s = SYSBUS_SDHCI(dev);
     SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
-    Error *local_err = NULL;
 
-    sdhci_common_realize(s, &local_err);
-    if (local_err) {
-        error_propagate(errp, local_err);
+    sdhci_common_realize(s, errp);
+    if (*errp) {
         return;
     }
 
@@ -1479,11 +1486,11 @@ static void sdhci_sysbus_realize(DeviceState *dev, Error **errp)
     sysbus_init_mmio(sbd, &s->iomem);
 }
 
-static void sdhci_sysbus_unrealize(DeviceState *dev, Error **errp)
+static void sdhci_sysbus_unrealize(DeviceState *dev)
 {
     SDHCIState *s = SYSBUS_SDHCI(dev);
 
-    sdhci_common_unrealize(s, &error_abort);
+    sdhci_common_unrealize(s);
 
      if (s->dma_mr) {
         address_space_destroy(s->dma_as);
@@ -1569,11 +1576,13 @@ static uint64_t usdhc_read(void *opaque, hwaddr offset, unsigned size)
         }
         break;
 
+    case ESDHC_VENDOR_SPEC:
+        ret = s->vendor_spec;
+        break;
     case ESDHC_DLL_CTRL:
     case ESDHC_TUNE_CTRL_STATUS:
     case ESDHC_UNDOCUMENTED_REG27:
     case ESDHC_TUNING_CTRL:
-    case ESDHC_VENDOR_SPEC:
     case ESDHC_MIX_CTRL:
     case ESDHC_WTMK_LVL:
         ret = 0;
@@ -1596,7 +1605,21 @@ usdhc_write(void *opaque, hwaddr offset, uint64_t val, unsigned size)
     case ESDHC_UNDOCUMENTED_REG27:
     case ESDHC_TUNING_CTRL:
     case ESDHC_WTMK_LVL:
+        break;
+
     case ESDHC_VENDOR_SPEC:
+        s->vendor_spec = value;
+        switch (s->vendor) {
+        case SDHCI_VENDOR_IMX:
+            if (value & ESDHC_IMX_FRC_SDCLK_ON) {
+                s->prnsts &= ~SDHC_IMX_CLOCK_GATE_OFF;
+            } else {
+                s->prnsts |= SDHC_IMX_CLOCK_GATE_OFF;
+            }
+            break;
+        default:
+            break;
+        }
         break;
 
     case SDHC_HOSTCTL:

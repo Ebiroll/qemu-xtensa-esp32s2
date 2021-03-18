@@ -33,6 +33,7 @@
 #include "migration/vmstate.h"
 #include "gusemu.h"
 #include "gustate.h"
+#include "qom/object.h"
 
 #define dolog(...) AUD_log ("audio", __VA_ARGS__)
 #ifdef DEBUG
@@ -41,16 +42,10 @@
 #define ldebug(...)
 #endif
 
-#ifdef HOST_WORDS_BIGENDIAN
-#define GUS_ENDIANNESS 1
-#else
-#define GUS_ENDIANNESS 0
-#endif
-
 #define TYPE_GUS "gus"
-#define GUS(obj) OBJECT_CHECK (GUSState, (obj), TYPE_GUS)
+OBJECT_DECLARE_SIMPLE_TYPE(GUSState, GUS)
 
-typedef struct GUSState {
+struct GUSState {
     ISADevice dev;
     GUSEmuState emu;
     QEMUSoundCard card;
@@ -66,7 +61,7 @@ typedef struct GUSState {
     IsaDma *isa_dma;
     PortioList portio_list1;
     PortioList portio_list2;
-} GUSState;
+};
 
 static uint32_t gus_readb(void *opaque, uint32_t nport)
 {
@@ -256,7 +251,7 @@ static void gus_realizefn (DeviceState *dev, Error **errp)
     as.freq = s->freq;
     as.nchannels = 2;
     as.fmt = AUDIO_FORMAT_S16;
-    as.endianness = GUS_ENDIANNESS;
+    as.endianness = AUDIO_HOST_ENDIANNESS;
 
     s->voice = AUD_open_out (
         &s->card,
@@ -292,12 +287,6 @@ static void gus_realizefn (DeviceState *dev, Error **errp)
     AUD_set_active_out (s->voice, 1);
 }
 
-static int GUS_init (ISABus *bus)
-{
-    isa_create_simple (bus, TYPE_GUS);
-    return 0;
-}
-
 static Property gus_properties[] = {
     DEFINE_AUDIO_PROPERTIES(GUSState, card),
     DEFINE_PROP_UINT32 ("freq",    GUSState, freq,        44100),
@@ -328,7 +317,7 @@ static const TypeInfo gus_info = {
 static void gus_register_types (void)
 {
     type_register_static (&gus_info);
-    isa_register_soundhw("gus", "Gravis Ultrasound GF1", GUS_init);
+    deprecated_register_soundhw("gus", "Gravis Ultrasound GF1", 1, TYPE_GUS);
 }
 
 type_init (gus_register_types)

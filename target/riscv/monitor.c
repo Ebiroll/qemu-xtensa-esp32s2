@@ -204,7 +204,7 @@ void hmp_info_mem(Monitor *mon, const QDict *qdict)
 {
     CPUArchState *env;
 
-    env = mon_get_cpu_env();
+    env = mon_get_cpu_env(mon);
     if (!env) {
         monitor_printf(mon, "No CPU available\n");
         return;
@@ -212,11 +212,6 @@ void hmp_info_mem(Monitor *mon, const QDict *qdict)
 
     if (!riscv_feature(env, RISCV_FEATURE_MMU)) {
         monitor_printf(mon, "S-mode MMU unavailable\n");
-        return;
-    }
-
-    if (env->priv_ver < PRIV_VERSION_1_10_0) {
-        monitor_printf(mon, "Privileged mode < 1.10 unsupported\n");
         return;
     }
 

@@ -19,21 +19,13 @@
 #include "qapi/qmp/qerror.h"
 #include "migration/vmstate.h"
 #include "trace.h"
+#include "qom/object.h"
 
-typedef struct DBusVMState DBusVMState;
-typedef struct DBusVMStateClass DBusVMStateClass;
 
 #define TYPE_DBUS_VMSTATE "dbus-vmstate"
-#define DBUS_VMSTATE(obj)                                \
-    OBJECT_CHECK(DBusVMState, (obj), TYPE_DBUS_VMSTATE)
-#define DBUS_VMSTATE_GET_CLASS(obj)                              \
-    OBJECT_GET_CLASS(DBusVMStateClass, (obj), TYPE_DBUS_VMSTATE)
-#define DBUS_VMSTATE_CLASS(klass)                                    \
-    OBJECT_CLASS_CHECK(DBusVMStateClass, (klass), TYPE_DBUS_VMSTATE)
+OBJECT_DECLARE_SIMPLE_TYPE(DBusVMState,
+                           DBUS_VMSTATE)
 
-struct DBusVMStateClass {
-    ObjectClass parent_class;
-};
 
 struct DBusVMState {
     Object parent;
@@ -481,11 +473,9 @@ dbus_vmstate_class_init(ObjectClass *oc, void *data)
     vc->get_id = dbus_vmstate_get_id;
 
     object_class_property_add_str(oc, "addr",
-                                  get_dbus_addr, set_dbus_addr,
-                                  &error_abort);
+                                  get_dbus_addr, set_dbus_addr);
     object_class_property_add_str(oc, "id-list",
-                                  get_id_list, set_id_list,
-                                  &error_abort);
+                                  get_id_list, set_id_list);
 }
 
 static const TypeInfo dbus_vmstate_info = {
@@ -493,7 +483,6 @@ static const TypeInfo dbus_vmstate_info = {
     .parent = TYPE_OBJECT,
     .instance_size = sizeof(DBusVMState),
     .instance_finalize = dbus_vmstate_finalize,
-    .class_size = sizeof(DBusVMStateClass),
     .class_init = dbus_vmstate_class_init,
     .interfaces = (InterfaceInfo[]) {
         { TYPE_USER_CREATABLE },

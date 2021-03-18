@@ -93,13 +93,19 @@ guest CPU state in case of a guest CPU exception.  This is passed
 to ``cpu_restore_state()``.  Therefore the value should either be 0,
 to indicate that the guest CPU state is already synchronized, or
 the result of ``GETPC()`` from the top level ``HELPER(foo)``
-function, which is a return address into the generated code.
+function, which is a return address into the generated code [#gpc]_.
+
+.. [#gpc] Note that ``GETPC()`` should be used with great care: calling
+          it in other functions that are *not* the top level
+          ``HELPER(foo)`` will cause unexpected behavior. Instead, the
+          value of ``GETPC()`` should be read from the helper and passed
+          if needed to the functions that the helper calls.
 
 Function names follow the pattern:
 
-load: ``cpu_ld{sign}{size}_mmuidx_ra(env, ptr, mmuidx, retaddr)``
+load: ``cpu_ld{sign}{size}{end}_mmuidx_ra(env, ptr, mmuidx, retaddr)``
 
-store: ``cpu_st{size}_mmuidx_ra(env, ptr, val, mmuidx, retaddr)``
+store: ``cpu_st{size}{end}_mmuidx_ra(env, ptr, val, mmuidx, retaddr)``
 
 ``sign``
  - (empty) : for 32 or 64 bit sizes
@@ -112,9 +118,14 @@ store: ``cpu_st{size}_mmuidx_ra(env, ptr, val, mmuidx, retaddr)``
  - ``l`` : 32 bits
  - ``q`` : 64 bits
 
+``end``
+ - (empty) : for target endian, or 8 bit sizes
+ - ``_be`` : big endian
+ - ``_le`` : little endian
+
 Regexes for git grep:
- - ``\<cpu_ld[us]\?[bwlq]_mmuidx_ra\>``
- - ``\<cpu_st[bwlq]_mmuidx_ra\>``
+ - ``\<cpu_ld[us]\?[bwlq](_[bl]e)\?_mmuidx_ra\>``
+ - ``\<cpu_st[bwlq](_[bl]e)\?_mmuidx_ra\>``
 
 ``cpu_{ld,st}*_data_ra``
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -129,9 +140,9 @@ be performed with a context other than the default.
 
 Function names follow the pattern:
 
-load: ``cpu_ld{sign}{size}_data_ra(env, ptr, ra)``
+load: ``cpu_ld{sign}{size}{end}_data_ra(env, ptr, ra)``
 
-store: ``cpu_st{size}_data_ra(env, ptr, val, ra)``
+store: ``cpu_st{size}{end}_data_ra(env, ptr, val, ra)``
 
 ``sign``
  - (empty) : for 32 or 64 bit sizes
@@ -144,9 +155,14 @@ store: ``cpu_st{size}_data_ra(env, ptr, val, ra)``
  - ``l`` : 32 bits
  - ``q`` : 64 bits
 
+``end``
+ - (empty) : for target endian, or 8 bit sizes
+ - ``_be`` : big endian
+ - ``_le`` : little endian
+
 Regexes for git grep:
- - ``\<cpu_ld[us]\?[bwlq]_data_ra\>``
- - ``\<cpu_st[bwlq]_data_ra\>``
+ - ``\<cpu_ld[us]\?[bwlq](_[bl]e)\?_data_ra\>``
+ - ``\<cpu_st[bwlq](_[bl]e)\?_data_ra\>``
 
 ``cpu_{ld,st}*_data``
 ~~~~~~~~~~~~~~~~~~~~~
@@ -163,9 +179,9 @@ the CPU state anyway.
 
 Function names follow the pattern:
 
-load: ``cpu_ld{sign}{size}_data(env, ptr)``
+load: ``cpu_ld{sign}{size}{end}_data(env, ptr)``
 
-store: ``cpu_st{size}_data(env, ptr, val)``
+store: ``cpu_st{size}{end}_data(env, ptr, val)``
 
 ``sign``
  - (empty) : for 32 or 64 bit sizes
@@ -178,9 +194,14 @@ store: ``cpu_st{size}_data(env, ptr, val)``
  - ``l`` : 32 bits
  - ``q`` : 64 bits
 
+``end``
+ - (empty) : for target endian, or 8 bit sizes
+ - ``_be`` : big endian
+ - ``_le`` : little endian
+
 Regexes for git grep
- - ``\<cpu_ld[us]\?[bwlq]_data\>``
- - ``\<cpu_st[bwlq]_data\+\>``
+ - ``\<cpu_ld[us]\?[bwlq](_[bl]e)\?_data\>``
+ - ``\<cpu_st[bwlq](_[bl]e)\?_data\+\>``
 
 ``cpu_ld*_code``
 ~~~~~~~~~~~~~~~~

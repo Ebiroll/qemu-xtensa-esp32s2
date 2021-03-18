@@ -341,48 +341,6 @@ static void qemu_rbd_memset(RADOSCB *rcb, int64_t offs)
     }
 }
 
-static QemuOptsList runtime_opts = {
-    .name = "rbd",
-    .head = QTAILQ_HEAD_INITIALIZER(runtime_opts.head),
-    .desc = {
-        {
-            .name = "pool",
-            .type = QEMU_OPT_STRING,
-            .help = "Rados pool name",
-        },
-        {
-            .name = "namespace",
-            .type = QEMU_OPT_STRING,
-            .help = "Rados namespace name in the pool",
-        },
-        {
-            .name = "image",
-            .type = QEMU_OPT_STRING,
-            .help = "Image name in the pool",
-        },
-        {
-            .name = "conf",
-            .type = QEMU_OPT_STRING,
-            .help = "Rados config file location",
-        },
-        {
-            .name = "snapshot",
-            .type = QEMU_OPT_STRING,
-            .help = "Ceph snapshot name",
-        },
-        {
-            /* maps to 'id' in rados_create() */
-            .name = "user",
-            .type = QEMU_OPT_STRING,
-            .help = "Rados id name",
-        },
-        /*
-         * server.* extracted manually, see qemu_rbd_mon_host()
-         */
-        { /* end of list */ }
-    },
-};
-
 /* FIXME Deprecate and remove keypairs or make it available in QMP. */
 static int qemu_rbd_do_create(BlockdevCreateOptions *options,
                               const char *keypairs, const char *password_secret,
@@ -681,7 +639,6 @@ static int qemu_rbd_convert_options(QDict *options, BlockdevOptionsRbd **opts,
                                     Error **errp)
 {
     Visitor *v;
-    Error *local_err = NULL;
 
     /* Convert the remaining options into a QAPI object */
     v = qobject_input_visitor_new_flat_confused(options, errp);
@@ -689,11 +646,9 @@ static int qemu_rbd_convert_options(QDict *options, BlockdevOptionsRbd **opts,
         return -EINVAL;
     }
 
-    visit_type_BlockdevOptionsRbd(v, NULL, opts, &local_err);
+    visit_type_BlockdevOptionsRbd(v, NULL, opts, errp);
     visit_free(v);
-
-    if (local_err) {
-        error_propagate(errp, local_err);
+    if (!opts) {
         return -EINVAL;
     }
 
@@ -816,6 +771,9 @@ static int qemu_rbd_open(BlockDriverState *bs, QDict *options, int flags,
             goto failed_open;
         }
     }
+
+    /* When extending regular files, we get zeros from the OS */
+    bs->supported_truncate_flags = BDRV_REQ_ZERO_WRITE;
 
     r = 0;
     goto out;
@@ -1108,6 +1066,7 @@ static int coroutine_fn qemu_rbd_co_truncate(BlockDriverState *bs,
                                              int64_t offset,
                                              bool exact,
                                              PreallocMode prealloc,
+                                             BdrvRequestFlags flags,
                                              Error **errp)
 {
     int r;
@@ -1288,6 +1247,7 @@ static QemuOptsList qemu_rbd_create_opts = {
 
 static const char *const qemu_rbd_strong_runtime_opts[] = {
     "pool",
+    "namespace",
     "image",
     "conf",
     "snapshot",
@@ -1309,7 +1269,6 @@ static BlockDriver bdrv_rbd = {
     .bdrv_co_create         = qemu_rbd_co_create,
     .bdrv_co_create_opts    = qemu_rbd_co_create_opts,
     .bdrv_has_zero_init     = bdrv_has_zero_init_1,
-    .bdrv_has_zero_init_truncate = bdrv_has_zero_init_1,
     .bdrv_get_info          = qemu_rbd_getinfo,
     .create_opts            = &qemu_rbd_create_opts,
     .bdrv_getlength         = qemu_rbd_getlength,

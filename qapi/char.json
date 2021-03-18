@@ -1,4 +1,5 @@
 # -*- Mode: Python -*-
+# vim: filetype=python
 #
 
 ##
@@ -320,8 +321,7 @@
 # Configuration info for stdio chardevs.
 #
 # @signal: Allow signals (such as SIGINT triggered by ^C)
-#          be delivered to qemu.  Default: true in -nographic mode,
-#          false otherwise.
+#          be delivered to qemu.  Default: true.
 #
 # Since: 1.5
 ##
@@ -560,6 +560,8 @@
 # @id: device identifier of the virtio-serial port
 #
 # @open: true if the guest has opened the virtio-serial port
+#
+# Note: This event is rate-limited.
 #
 # Since: 2.1
 #

@@ -28,19 +28,21 @@
 #include "audio/audio.h"
 #include "qemu/module.h"
 #include "qemu/timer.h"
+#include "qemu/error-report.h"
 #include "hw/timer/i8254.h"
 #include "migration/vmstate.h"
 #include "hw/audio/pcspk.h"
 #include "qapi/error.h"
+#include "qom/object.h"
 
 #define PCSPK_BUF_LEN 1792
 #define PCSPK_SAMPLE_RATE 32000
 #define PCSPK_MAX_FREQ (PCSPK_SAMPLE_RATE >> 1)
 #define PCSPK_MIN_COUNT DIV_ROUND_UP(PIT_FREQ, PCSPK_MAX_FREQ)
 
-#define PC_SPEAKER(obj) OBJECT_CHECK(PCSpkState, (obj), TYPE_PC_SPEAKER)
+OBJECT_DECLARE_SIMPLE_TYPE(PCSpkState, PC_SPEAKER)
 
-typedef struct {
+struct PCSpkState {
     ISADevice parent_obj;
 
     MemoryRegion ioport;
@@ -55,7 +57,7 @@ typedef struct {
     uint8_t data_on;
     uint8_t dummy_refresh_clock;
     bool migrate;
-} PCSpkState;
+};
 
 static const char *s_spk = "pcspk";
 static PCSpkState *pcspk_state;
@@ -112,10 +114,14 @@ static void pcspk_callback(void *opaque, int free)
     }
 }
 
-static int pcspk_audio_init(ISABus *bus)
+static int pcspk_audio_init(PCSpkState *s)
 {
-    PCSpkState *s = pcspk_state;
     struct audsettings as = {PCSPK_SAMPLE_RATE, 1, AUDIO_FORMAT_U8, 0};
+
+    if (s->voice) {
+        /* already initialized */
+        return 0;
+    }
 
     AUD_register_card(s_spk, &s->card);
 
@@ -175,7 +181,7 @@ static void pcspk_initfn(Object *obj)
     object_property_add_link(obj, "pit", TYPE_PIT_COMMON,
                              (Object **)&s->pit,
                              qdev_prop_allow_set_link_before_realize,
-                             0, &error_abort);
+                             0);
 }
 
 static void pcspk_realizefn(DeviceState *dev, Error **errp)
@@ -184,6 +190,10 @@ static void pcspk_realizefn(DeviceState *dev, Error **errp)
     PCSpkState *s = PC_SPEAKER(dev);
 
     isa_register_ioport(isadev, &s->ioport, s->iobase);
+
+    if (s->card.state) {
+        pcspk_audio_init(s);
+    }
 
     pcspk_state = s;
 }
@@ -210,7 +220,7 @@ static const VMStateDescription vmstate_spk = {
 
 static Property pcspk_properties[] = {
     DEFINE_AUDIO_PROPERTIES(PCSpkState, card),
-    DEFINE_PROP_UINT32("iobase", PCSpkState, iobase,  -1),
+    DEFINE_PROP_UINT32("iobase", PCSpkState, iobase,  0x61),
     DEFINE_PROP_BOOL("migrate", PCSpkState, migrate,  true),
     DEFINE_PROP_END_OF_LIST(),
 };
@@ -236,9 +246,18 @@ static const TypeInfo pcspk_info = {
     .class_init     = pcspk_class_initfn,
 };
 
+static int pcspk_audio_init_soundhw(ISABus *bus)
+{
+    PCSpkState *s = pcspk_state;
+
+    warn_report("'-soundhw pcspk' is deprecated, "
+                "please set a backend using '-machine pcspk-audiodev=<name>' instead");
+    return pcspk_audio_init(s);
+}
+
 static void pcspk_register(void)
 {
     type_register_static(&pcspk_info);
-    isa_register_soundhw("pcspk", "PC speaker", pcspk_audio_init);
+    isa_register_soundhw("pcspk", "PC speaker", pcspk_audio_init_soundhw);
 }
 type_init(pcspk_register)

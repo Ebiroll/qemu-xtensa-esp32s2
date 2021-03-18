@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -34,6 +34,7 @@
 #include "elf.h"
 #include "milkymist-hw.h"
 #include "hw/display/milkymist_tmu2.h"
+#include "hw/sd/sd.h"
 #include "lm32.h"
 #include "exec/address-spaces.h"
 #include "qemu/cutils.h"
@@ -78,6 +79,29 @@ static void main_cpu_reset(void *opaque)
     env->regs[R_R3] = reset_info->initrd_base + reset_info->initrd_size;
     env->eba = reset_info->flash_base;
     env->deba = reset_info->flash_base;
+}
+
+static DeviceState *milkymist_memcard_create(hwaddr base)
+{
+    DeviceState *dev;
+    DriveInfo *dinfo;
+
+    dev = qdev_new("milkymist-memcard");
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, base);
+
+    dinfo = drive_get_next(IF_SD);
+    if (dinfo) {
+        DeviceState *card;
+
+        card = qdev_new(TYPE_SD_CARD);
+        qdev_prop_set_drive_err(card, "drive", blk_by_legacy_dinfo(dinfo),
+                                &error_fatal);
+        qdev_realize_and_unref(card, qdev_get_child_bus(dev, "sd-bus"),
+                               &error_fatal);
+    }
+
+    return dev;
 }
 
 static void

@@ -50,6 +50,7 @@
 #include "exec/memattrs.h"
 #include "hw/s390x/s390-virtio-ccw.h"
 #include "hw/s390x/s390-virtio-hcall.h"
+#include "hw/s390x/pv.h"
 
 #ifndef DEBUG_KVM
 #define DEBUG_KVM  0
@@ -104,6 +105,7 @@
 
 #define DIAG_TIMEREVENT                 0x288
 #define DIAG_IPL                        0x308
+#define DIAG_SET_CONTROL_PROGRAM_CODES  0x318
 #define DIAG_KVM_HYPERCALL              0x500
 #define DIAG_KVM_BREAKPOINT             0x501
 
@@ -115,6 +117,8 @@
 #define ICPT_CPU_STOP                   0x28
 #define ICPT_OPEREXC                    0x2c
 #define ICPT_IO                         0x40
+#define ICPT_PV_INSTR                   0x68
+#define ICPT_PV_INSTR_NOTIFICATION      0x6c
 
 #define NR_LOCAL_IRQS 32
 /*
@@ -152,6 +156,7 @@ static int cap_ri;
 static int cap_gs;
 static int cap_hpage_1m;
 static int cap_vcpu_resets;
+static int cap_protected;
 
 static int active_cmma;
 
@@ -321,6 +326,11 @@ void kvm_s390_set_max_pagesize(uint64_t pagesize, Error **errp)
     cap_hpage_1m = 1;
 }
 
+int kvm_s390_get_hpage_1m(void)
+{
+    return cap_hpage_1m;
+}
+
 static void ccw_machine_class_foreach(ObjectClass *oc, void *opaque)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
@@ -344,6 +354,7 @@ int kvm_arch_init(MachineState *ms, KVMState *s)
     cap_mem_op = kvm_check_extension(s, KVM_CAP_S390_MEM_OP);
     cap_s390_irq = kvm_check_extension(s, KVM_CAP_S390_INJECT_IRQ);
     cap_vcpu_resets = kvm_check_extension(s, KVM_CAP_S390_VCPU_RESETS);
+    cap_protected = kvm_check_extension(s, KVM_CAP_S390_PROTECTED);
 
     if (!kvm_check_extension(s, KVM_CAP_S390_GMAP)
         || !kvm_check_extension(s, KVM_CAP_S390_COW)) {
@@ -592,6 +603,11 @@ int kvm_arch_put_registers(CPUState *cs, int level)
         cs->kvm_run->kvm_dirty_regs |= KVM_SYNC_ETOKEN;
     }
 
+    if (can_sync_regs(cs, KVM_SYNC_DIAG318)) {
+        cs->kvm_run->s.regs.diag318 = env->diag318_info;
+        cs->kvm_run->kvm_dirty_regs |= KVM_SYNC_DIAG318;
+    }
+
     /* Finally the prefix */
     if (can_sync_regs(cs, KVM_SYNC_PREFIX)) {
         cs->kvm_run->s.regs.prefix = env->psa;
@@ -731,6 +747,10 @@ int kvm_arch_get_registers(CPUState *cs)
         }
     }
 
+    if (can_sync_regs(cs, KVM_SYNC_DIAG318)) {
+        env->diag318_info = cs->kvm_run->s.regs.diag318;
+    }
+
     return 0;
 }
 
@@ -840,6 +860,30 @@ int kvm_s390_mem_op(S390CPU *cpu, vaddr addr, uint8_t ar, void *hostbuf,
     ret = kvm_vcpu_ioctl(CPU(cpu), KVM_S390_MEM_OP, &mem_op);
     if (ret < 0) {
         warn_report("KVM_S390_MEM_OP failed: %s", strerror(-ret));
+    }
+    return ret;
+}
+
+int kvm_s390_mem_op_pv(S390CPU *cpu, uint64_t offset, void *hostbuf,
+                       int len, bool is_write)
+{
+    struct kvm_s390_mem_op mem_op = {
+        .sida_offset = offset,
+        .size = len,
+        .op = is_write ? KVM_S390_MEMOP_SIDA_WRITE
+                       : KVM_S390_MEMOP_SIDA_READ,
+        .buf = (uint64_t)hostbuf,
+    };
+    int ret;
+
+    if (!cap_mem_op || !cap_protected) {
+        return -ENOSYS;
+    }
+
+    ret = kvm_vcpu_ioctl(CPU(cpu), KVM_S390_MEM_OP, &mem_op);
+    if (ret < 0) {
+        error_report("KVM_S390_MEM_OP failed: %s", strerror(-ret));
+        abort();
     }
     return ret;
 }
@@ -1199,12 +1243,27 @@ static void kvm_sclp_service_call(S390CPU *cpu, struct kvm_run *run,
     sccb = env->regs[ipbh0 & 0xf];
     code = env->regs[(ipbh0 & 0xf0) >> 4];
 
-    r = sclp_service_call(env, sccb, code);
-    if (r < 0) {
-        kvm_s390_program_interrupt(cpu, -r);
-        return;
+    switch (run->s390_sieic.icptcode) {
+    case ICPT_PV_INSTR_NOTIFICATION:
+        g_assert(s390_is_pv());
+        /* The notification intercepts are currently handled by KVM */
+        error_report("unexpected SCLP PV notification");
+        exit(1);
+        break;
+    case ICPT_PV_INSTR:
+        g_assert(s390_is_pv());
+        sclp_service_call_protected(env, sccb, code);
+        /* Setting the CC is done by the Ultravisor. */
+        break;
+    case ICPT_INSTRUCTION:
+        g_assert(!s390_is_pv());
+        r = sclp_service_call(env, sccb, code);
+        if (r < 0) {
+            kvm_s390_program_interrupt(cpu, -r);
+            return;
+        }
+        setcc(cpu, r);
     }
-    setcc(cpu, r);
 }
 
 static int handle_b2(S390CPU *cpu, struct kvm_run *run, uint8_t ipa1)
@@ -1552,6 +1611,39 @@ static int handle_sw_breakpoint(S390CPU *cpu, struct kvm_run *run)
     return -ENOENT;
 }
 
+void kvm_s390_set_diag318(CPUState *cs, uint64_t diag318_info)
+{
+    CPUS390XState *env = &S390_CPU(cs)->env;
+
+    /* Feat bit is set only if KVM supports sync for diag318 */
+    if (s390_has_feat(S390_FEAT_DIAG_318)) {
+        env->diag318_info = diag318_info;
+        cs->kvm_run->s.regs.diag318 = diag318_info;
+        cs->kvm_run->kvm_dirty_regs |= KVM_SYNC_DIAG318;
+    }
+}
+
+static void handle_diag_318(S390CPU *cpu, struct kvm_run *run)
+{
+    uint64_t reg = (run->s390_sieic.ipa & 0x00f0) >> 4;
+    uint64_t diag318_info = run->s.regs.gprs[reg];
+    CPUState *t;
+
+    /*
+     * DIAG 318 can only be enabled with KVM support. As such, let's
+     * ensure a guest cannot execute this instruction erroneously.
+     */
+    if (!s390_has_feat(S390_FEAT_DIAG_318)) {
+        kvm_s390_program_interrupt(cpu, PGM_SPECIFICATION);
+        return;
+    }
+
+    CPU_FOREACH(t) {
+        run_on_cpu(t, s390_do_cpu_set_diag318,
+                   RUN_ON_CPU_HOST_ULONG(diag318_info));
+    }
+}
+
 #define DIAG_KVM_CODE_MASK 0x000000000000ffff
 
 static int handle_diag(S390CPU *cpu, struct kvm_run *run, uint32_t ipb)
@@ -1570,6 +1662,9 @@ static int handle_diag(S390CPU *cpu, struct kvm_run *run, uint32_t ipb)
         break;
     case DIAG_IPL:
         kvm_handle_diag_308(cpu, run);
+        break;
+    case DIAG_SET_CONTROL_PROGRAM_CODES:
+        handle_diag_318(cpu, run);
         break;
     case DIAG_KVM_HYPERCALL:
         r = handle_hypercall(cpu, run);
@@ -1693,6 +1788,8 @@ static int handle_intercept(S390CPU *cpu)
             (long)cs->kvm_run->psw_addr);
     switch (icpt_code) {
         case ICPT_INSTRUCTION:
+        case ICPT_PV_INSTR:
+        case ICPT_PV_INSTR_NOTIFICATION:
             r = handle_instruction(cpu, run);
             break;
         case ICPT_PROGRAM:
@@ -1773,7 +1870,9 @@ static void insert_stsi_3_2_2(S390CPU *cpu, __u64 addr, uint8_t ar)
     SysIB_322 sysib;
     int del, i;
 
-    if (s390_cpu_virt_mem_read(cpu, addr, ar, &sysib, sizeof(sysib))) {
+    if (s390_is_pv()) {
+        s390_cpu_pv_mem_read(cpu, 0, &sysib, sizeof(sysib));
+    } else if (s390_cpu_virt_mem_read(cpu, addr, ar, &sysib, sizeof(sysib))) {
         return;
     }
     /* Shift the stack of Extended Names to prepare for our own data */
@@ -1826,7 +1925,11 @@ static void insert_stsi_3_2_2(S390CPU *cpu, __u64 addr, uint8_t ar)
     /* Insert UUID */
     memcpy(sysib.vm[0].uuid, &qemu_uuid, sizeof(sysib.vm[0].uuid));
 
-    s390_cpu_virt_mem_write(cpu, addr, ar, &sysib, sizeof(sysib));
+    if (s390_is_pv()) {
+        s390_cpu_pv_mem_write(cpu, 0, &sysib, sizeof(sysib));
+    } else {
+        s390_cpu_virt_mem_write(cpu, addr, ar, &sysib, sizeof(sysib));
+    }
 }
 
 static int handle_stsi(S390CPU *cpu)
@@ -2108,7 +2211,7 @@ int kvm_arch_msi_data_to_gsi(uint32_t data)
 
 static int query_cpu_subfunc(S390FeatBitmap features)
 {
-    struct kvm_s390_vm_cpu_subfunc prop;
+    struct kvm_s390_vm_cpu_subfunc prop = {};
     struct kvm_device_attr attr = {
         .group = KVM_S390_VM_CPU_MODEL,
         .attr = KVM_S390_VM_CPU_MACHINE_SUBFUNC,
@@ -2235,7 +2338,7 @@ static int kvm_to_feat[][2] = {
 
 static int query_cpu_feat(S390FeatBitmap features)
 {
-    struct kvm_s390_vm_cpu_feat prop;
+    struct kvm_s390_vm_cpu_feat prop = {};
     struct kvm_device_attr attr = {
         .group = KVM_S390_VM_CPU_MODEL,
         .attr = KVM_S390_VM_CPU_MACHINE_FEAT,
@@ -2368,6 +2471,14 @@ void kvm_s390_get_host_cpu_model(S390CPUModel *model, Error **errp)
         clear_bit(S390_FEAT_BPB, model->features);
     }
 
+    /*
+     * If we have support for protected virtualization, indicate
+     * the protected virtualization IPL unpack facility.
+     */
+    if (cap_protected) {
+        set_bit(S390_FEAT_UNPACK, model->features);
+    }
+
     /* We emulate a zPCI bus and AEN, therefore we don't need HW support */
     set_bit(S390_FEAT_ZPCI, model->features);
     set_bit(S390_FEAT_ADAPTER_EVENT_NOTIFICATION, model->features);
@@ -2391,6 +2502,18 @@ void kvm_s390_get_host_cpu_model(S390CPUModel *model, Error **errp)
         KVM_S390_VM_CRYPTO_ENABLE_APIE)) {
         set_bit(S390_FEAT_AP, model->features);
     }
+
+    /*
+     * Extended-Length SCCB is handled entirely within QEMU.
+     * For PV guests this is completely fenced by the Ultravisor, as Service
+     * Call error checking and STFLE interpretation are handled via SIE.
+     */
+    set_bit(S390_FEAT_EXTENDED_LENGTH_SCCB, model->features);
+
+    if (kvm_check_extension(kvm_state, KVM_CAP_S390_DIAG318)) {
+        set_bit(S390_FEAT_DIAG_318, model->features);
+    }
+
     /* strip of features that are not part of the maximum model */
     bitmap_and(model->features, model->features, model->def->full_feat,
                S390_FEAT_MAX);

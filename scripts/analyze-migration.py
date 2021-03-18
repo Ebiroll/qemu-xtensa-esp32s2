@@ -7,7 +7,7 @@
 # This library is free software; you can redistribute it and/or
 # modify it under the terms of the GNU Lesser General Public
 # License as published by the Free Software Foundation; either
-# version 2 of the License, or (at your option) any later version.
+# version 2.1 of the License, or (at your option) any later version.
 #
 # This library is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -23,11 +23,6 @@ import argparse
 import collections
 import struct
 import sys
-
-
-MIN_PYTHON = (3, 2)
-if sys.version_info < MIN_PYTHON:
-    sys.exit("Python %s.%s or later is required.\n" % MIN_PYTHON)
 
 
 def mkdir_p(path):
@@ -102,7 +97,8 @@ class MigrationFile(object):
         # Seek back to where we were at the beginning
         self.file.seek(entrypos, 0)
 
-        return data[jsonpos:jsonpos + jsonlen]
+        # explicit decode() needed for Python 3.5 compatibility
+        return data[jsonpos:jsonpos + jsonlen].decode("utf-8")
 
     def close(self):
         self.file.close()

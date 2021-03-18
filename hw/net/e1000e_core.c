@@ -22,7 +22,7 @@
 * This library is free software; you can redistribute it and/or
 * modify it under the terms of the GNU Lesser General Public
 * License as published by the Free Software Foundation; either
-* version 2 of the License, or (at your option) any later version.
+* version 2.1 of the License, or (at your option) any later version.
 *
 * This library is distributed in the hope that it will be useful,
 * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -34,9 +34,9 @@
 */
 
 #include "qemu/osdep.h"
+#include "qemu/log.h"
 #include "net/net.h"
 #include "net/tap.h"
-#include "hw/hw.h"
 #include "hw/pci/msi.h"
 #include "hw/pci/msix.h"
 #include "sysemu/runstate.h"
@@ -1596,12 +1596,12 @@ e1000e_write_packet_to_guest(E1000ECore *core, struct NetRxPkt *pkt,
                           (const char *) &fcs_pad, e1000x_fcs_len(core->mac));
                 }
             }
-            desc_offset += desc_size;
-            if (desc_offset >= total_size) {
-                is_last = true;
-            }
         } else { /* as per intel docs; skip descriptors with null buf addr */
             trace_e1000e_rx_null_descriptor();
+        }
+        desc_offset += desc_size;
+        if (desc_offset >= total_size) {
+            is_last = true;
         }
 
         e1000e_write_rx_descr(core, desc, is_last ? core->rx_pkt : NULL,
@@ -2816,11 +2816,15 @@ e1000e_set_psrctl(E1000ECore *core, int index, uint32_t val)
     if (core->mac[RCTL] & E1000_RCTL_DTYP_MASK) {
 
         if ((val & E1000_PSRCTL_BSIZE0_MASK) == 0) {
-            hw_error("e1000e: PSRCTL.BSIZE0 cannot be zero");
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "e1000e: PSRCTL.BSIZE0 cannot be zero");
+            return;
         }
 
         if ((val & E1000_PSRCTL_BSIZE1_MASK) == 0) {
-            hw_error("e1000e: PSRCTL.BSIZE1 cannot be zero");
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "e1000e: PSRCTL.BSIZE1 cannot be zero");
+            return;
         }
     }
 
@@ -2912,7 +2916,6 @@ static const readops e1000e_macreg_readops[] = {
     e1000e_getreg(TSYNCRXCTL),
     e1000e_getreg(TDH),
     e1000e_getreg(LEDCTL),
-    e1000e_getreg(STATUS),
     e1000e_getreg(TCTL),
     e1000e_getreg(TDBAL),
     e1000e_getreg(TDLEN),
@@ -3138,7 +3141,6 @@ static const writeops e1000e_macreg_writeops[] = {
     e1000e_putreg(RXCFGL),
     e1000e_putreg(TSYNCRXCTL),
     e1000e_putreg(TSYNCTXCTL),
-    e1000e_putreg(FLSWDATA),
     e1000e_putreg(EXTCNF_SIZE),
     e1000e_putreg(EEMNGCTL),
     e1000e_putreg(RA),

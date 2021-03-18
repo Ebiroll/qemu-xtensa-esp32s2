@@ -25,6 +25,7 @@
 #include "qemu/config-file.h"
 #include "qemu/readline.h"
 #include "qemu/log.h"
+#include "qemu/sockets.h"
 #include "qapi/qmp/qstring.h"
 #include "qapi/qmp/qdict.h"
 #include "qom/object_interfaces.h"
@@ -535,13 +536,13 @@ int main(int argc, char **argv)
     Error *local_error = NULL;
     QDict *opts = NULL;
     const char *format = NULL;
-    char *trace_file = NULL;
     bool force_share = false;
 
 #ifdef CONFIG_POSIX
     signal(SIGPIPE, SIG_IGN);
 #endif
 
+    socket_init();
     error_init(argv[0]);
     module_call_init(MODULE_INIT_TRACE);
     qemu_init_exec_dir(argv[0]);
@@ -599,8 +600,7 @@ int main(int argc, char **argv)
             }
             break;
         case 'T':
-            g_free(trace_file);
-            trace_file = trace_opt_parse(optarg);
+            trace_opt_parse(optarg);
             break;
         case 'V':
             printf("%s version " QEMU_FULL_VERSION "\n"
@@ -651,7 +651,7 @@ int main(int argc, char **argv)
     if (!trace_init_backends()) {
         exit(1);
     }
-    trace_init_file(trace_file);
+    trace_init_file();
     qemu_set_log(LOG_TRACE);
 
     /* initialize commands */

@@ -34,7 +34,6 @@ DEF("machine", HAS_ARG, QEMU_OPTION_machine, \
     "                dea-key-wrap=on|off controls support for DEA key wrapping (default=on)\n"
     "                suppress-vmdesc=on|off disables self-describing migration (default=off)\n"
     "                nvdimm=on|off controls NVDIMM support (default=off)\n"
-    "                enforce-config-section=on|off enforce configuration section migration (default=off)\n"
     "                memory-encryption=@var{} memory encryption object to use (default=none)\n"
     "                hmat=on|off controls ACPI HMAT support (default=off)\n",
     QEMU_ARCH_ALL)
@@ -90,13 +89,6 @@ SRST
 
     ``nvdimm=on|off``
         Enables or disables NVDIMM support. The default is off.
-
-    ``enforce-config-section=on|off``
-        If ``enforce-config-section`` is set to on, force migration code
-        to send configuration section even if the machine-type sets the
-        ``migration.send-configuration`` property to off. NOTE: this
-        parameter is deprecated. Please use ``-global``
-        ``migration.send-configuration``\ =on\|off instead.
 
     ``memory-encryption=``
         Memory encryption object to use. The default is none.
@@ -239,10 +231,11 @@ SRST
         -numa node,nodeid=0 -numa node,nodeid=1 \
         -numa cpu,node-id=0,socket-id=0 -numa cpu,node-id=1,socket-id=1
 
-    '\ ``mem``\ ' assigns a given RAM amount to a node. '\ ``memdev``\ '
-    assigns RAM from a given memory backend device to a node. If
-    '\ ``mem``\ ' and '\ ``memdev``\ ' are omitted in all nodes, RAM is
-    split equally between them.
+    Legacy '\ ``mem``\ ' assigns a given RAM amount to a node (not supported
+    for 5.1 and newer machine types). '\ ``memdev``\ ' assigns RAM from
+    a given memory backend device to a node. If '\ ``mem``\ ' and
+    '\ ``memdev``\ ' are omitted in all nodes, RAM is split equally between them.
+
 
     '\ ``mem``\ ' and '\ ``memdev``\ ' are mutually exclusive.
     Furthermore, if one node uses '\ ``memdev``\ ', all of them have to
@@ -372,9 +365,9 @@ SRST
 
     .. parsed-literal::
 
-        |qemu_system| \
-         -add-fd fd=3,set=2,opaque="rdwr:/path/to/file" \
-         -add-fd fd=4,set=2,opaque="rdonly:/path/to/file" \
+        |qemu_system| \\
+         -add-fd fd=3,set=2,opaque="rdwr:/path/to/file" \\
+         -add-fd fd=4,set=2,opaque="rdonly:/path/to/file" \\
          -drive file=/dev/fdset/2,index=0,media=disk
 ERST
 
@@ -805,7 +798,7 @@ SRST
 
     Some drivers are:
 
-``-device ipmi-bmc-sim,id=id[,slave_addr=val][,sdrfile=file][,furareasize=val][,furdatafile=file][,guid=uuid]``
+``-device ipmi-bmc-sim,id=id[,prop[=value][,...]]``
     Add an IPMI BMC. This is a simulation of a hardware management
     interface processor that normally sits on a system. It provides a
     watchdog and the ability to reset and power control the system. You
@@ -875,6 +868,15 @@ SRST
 ``-device isa-ipmi-bt,bmc=id[,ioport=val][,irq=val]``
     Like the KCS interface, but defines a BT interface. The default port
     is 0xe4 and the default interrupt is 5.
+
+``-device pci-ipmi-kcs,bmc=id``
+    Add a KCS IPMI interafce on the PCI bus.
+
+    ``bmc=id``
+        The BMC to connect to, one of ipmi-bmc-sim or ipmi-bmc-extern above.
+
+``-device pci-ipmi-bt,bmc=id``
+    Like the KCS interface, but defines a BT interface on the PCI bus.
 ERST
 
 DEF("name", HAS_ARG, QEMU_OPTION_name,
@@ -911,8 +913,8 @@ SRST
 ``-fda file``
   \
 ``-fdb file``
-    Use file as floppy disk 0/1 image (see
-    :ref:`disk_005fimages`).
+    Use file as floppy disk 0/1 image (see the :ref:`disk images` chapter in
+    the System Emulation Users Guide).
 ERST
 
 DEF("hda", HAS_ARG, QEMU_OPTION_hda,
@@ -929,8 +931,8 @@ SRST
 ``-hdc file``
   \ 
 ``-hdd file``
-    Use file as hard disk 0, 1, 2 or 3 image (see
-    :ref:`disk_005fimages`).
+    Use file as hard disk 0, 1, 2 or 3 image (see the :ref:`disk images`
+    chapter in the System Emulation Users Guide).
 ERST
 
 DEF("cdrom", HAS_ARG, QEMU_OPTION_cdrom,
@@ -1043,7 +1045,8 @@ SRST
             The path to the image file in the local filesystem
 
         ``aio``
-            Specifies the AIO backend (threads/native, default: threads)
+            Specifies the AIO backend (threads/native/io_uring,
+            default: threads)
 
         ``locking``
             Specifies whether the image file is protected with Linux OFD
@@ -1165,7 +1168,8 @@ DEF("drive", HAS_ARG, QEMU_OPTION_drive,
     "-drive [file=file][,if=type][,bus=n][,unit=m][,media=d][,index=i]\n"
     "       [,cache=writethrough|writeback|none|directsync|unsafe][,format=f]\n"
     "       [,snapshot=on|off][,rerror=ignore|stop|report]\n"
-    "       [,werror=ignore|stop|report|enospc][,id=name][,aio=threads|native]\n"
+    "       [,werror=ignore|stop|report|enospc][,id=name]\n"
+    "       [,aio=threads|native|io_uring]\n"
     "       [,readonly=on|off][,copy-on-read=on|off]\n"
     "       [,discard=ignore|unmap][,detect-zeroes=on|off|unmap]\n"
     "       [[,bps=b]|[[,bps_rd=r][,bps_wr=w]]]\n"
@@ -1185,9 +1189,9 @@ SRST
     In addition, it knows the following options:
 
     ``file=file``
-        This option defines which disk image (see
-        :ref:`disk_005fimages`) to use with this drive. If
-        the filename contains comma, you must double it (for instance,
+        This option defines which disk image (see the :ref:`disk images`
+        chapter in the System Emulation Users Guide) to use with this drive.
+        If the filename contains comma, you must double it (for instance,
         "file=my,,file" to use file "my,file").
 
         Special files such as iSCSI devices can be specified using
@@ -1237,8 +1241,8 @@ SRST
         The default mode is ``cache=writeback``.
 
     ``aio=aio``
-        aio is "threads", or "native" and selects between pthread based
-        disk I/O and native Linux AIO.
+        aio is "threads", "native", or "io_uring" and selects between pthread
+        based disk I/O, native Linux AIO, or Linux io_uring API.
 
     ``format=format``
         Specify which disk format will be used rather than detecting the
@@ -1328,9 +1332,9 @@ SRST
 
     .. parsed-literal::
 
-        |qemu_system| \
-         -add-fd fd=3,set=2,opaque="rdwr:/path/to/file" \
-         -add-fd fd=4,set=2,opaque="rdonly:/path/to/file" \
+        |qemu_system| \\
+         -add-fd fd=3,set=2,opaque="rdwr:/path/to/file" \\
+         -add-fd fd=4,set=2,opaque="rdonly:/path/to/file" \\
          -drive file=/dev/fdset/2,index=0,media=disk
 
     You can connect a CDROM to the slave of ide0:
@@ -1396,8 +1400,8 @@ SRST
 ``-snapshot``
     Write to temporary files instead of disk image files. In this case,
     the raw disk image you use is not written back. You can however
-    force the write back by pressing C-a s (see
-    :ref:`disk_005fimages`).
+    force the write back by pressing C-a s (see the :ref:`disk images`
+    chapter in the System Emulation Users Guide).
 ERST
 
 DEF("fsdev", HAS_ARG, QEMU_OPTION_fsdev,
@@ -1542,9 +1546,17 @@ SRST
 ``-virtfs proxy,sock_fd=sock_fd,mount_tag=mount_tag [,writeout=writeout][,readonly]``
   \
 ``-virtfs synth,mount_tag=mount_tag``
-    Define a new filesystem device and expose it to the guest using a
-    virtio-9p-device. The general form of a Virtual File system
-    pass-through options are:
+    Define a new virtual filesystem device and expose it to the guest using
+    a virtio-9p-device (a.k.a. 9pfs), which essentially means that a certain
+    directory on host is made directly accessible by guest as a pass-through
+    file system by using the 9P network protocol for communication between
+    host and guests, if desired even accessible, shared by several guests
+    simultaniously.
+
+    Note that ``-virtfs`` is actually just a convenience shortcut for its
+    generalized form ``-fsdev -device virtio-9p-pci``.
+
+    The general form of pass-through file system options are:
 
     ``local``
         Accesses to the filesystem are done by QEMU.
@@ -1675,8 +1687,8 @@ DEF("usbdevice", HAS_ARG, QEMU_OPTION_usbdevice,
 SRST
 ``-usbdevice devname``
     Add the USB device devname. Note that this option is deprecated,
-    please use ``-device usb-...`` instead. See
-    :ref:`usb_005fdevices`.
+    please use ``-device usb-...`` instead. See the chapter about
+    :ref:`Connecting USB devices` in the System Emulation Users Guide.
 
     ``mouse``
         Virtual Mouse. This will override the PS/2 mouse emulation when
@@ -2098,7 +2110,7 @@ SRST
         connections.
 
         The password must be set separately using the ``set_password``
-        command in the :ref:`pcsys_005fmonitor`. The
+        command in the :ref:`QEMU monitor`. The
         syntax to change your password is:
         ``set_password <protocol> <password>`` where <protocol> could be
         either "vnc" or "spice".
@@ -2143,8 +2155,8 @@ SRST
         and 'x509' settings to enable use of SSL and server
         certificates. This ensures a data encryption preventing
         compromise of authentication credentials. See the
-        :ref:`vnc_005fsecurity` section for details on
-        using SASL authentication.
+        :ref:`VNC security` section in the System Emulation Users Guide
+        for details on using SASL authentication.
 
     ``sasl-authz=ID``
         Provides the ID of the QAuthZ authorization object against which
@@ -2276,8 +2288,10 @@ DEF("smbios", HAS_ARG, QEMU_OPTION_smbios,
     "              [,sku=str]\n"
     "                specify SMBIOS type 3 fields\n"
     "-smbios type=4[,sock_pfx=str][,manufacturer=str][,version=str][,serial=str]\n"
-    "              [,asset=str][,part=str]\n"
+    "              [,asset=str][,part=str][,max-speed=%d][,current-speed=%d]\n"
     "                specify SMBIOS type 4 fields\n"
+    "-smbios type=11[,value=str][,path=filename]\n"
+    "                specify SMBIOS type 11 fields\n"
     "-smbios type=17[,loc_pfx=str][,bank=str][,manufacturer=str][,serial=str]\n"
     "               [,asset=str][,part=str][,speed=%d]\n"
     "                specify SMBIOS type 17 fields\n",
@@ -2300,6 +2314,45 @@ SRST
 
 ``-smbios type=4[,sock_pfx=str][,manufacturer=str][,version=str][,serial=str][,asset=str][,part=str]``
     Specify SMBIOS type 4 fields
+
+``-smbios type=11[,value=str][,path=filename]``
+    Specify SMBIOS type 11 fields
+
+    This argument can be repeated multiple times, and values are added in the order they are parsed.
+    Applications intending to use OEM strings data are encouraged to use their application name as
+    a prefix for the value string. This facilitates passing information for multiple applications
+    concurrently.
+
+    The ``value=str`` syntax provides the string data inline, while the ``path=filename`` syntax
+    loads data from a file on disk. Note that the file is not permitted to contain any NUL bytes.
+
+    Both the ``value`` and ``path`` options can be repeated multiple times and will be added to
+    the SMBIOS table in the order in which they appear.
+
+    Note that on the x86 architecture, the total size of all SMBIOS tables is limited to 65535
+    bytes. Thus the OEM strings data is not suitable for passing large amounts of data into the
+    guest. Instead it should be used as a indicator to inform the guest where to locate the real
+    data set, for example, by specifying the serial ID of a block device.
+
+    An example passing three strings is
+
+    .. parsed-literal::
+
+        -smbios type=11,value=cloud-init:ds=nocloud-net;s=http://10.10.0.1:8000/,\\
+                        value=anaconda:method=http://dl.fedoraproject.org/pub/fedora/linux/releases/25/x86_64/os,\\
+                        path=/some/file/with/oemstringsdata.txt
+
+    In the guest OS this is visible with the ``dmidecode`` command
+
+     .. parsed-literal::
+
+         $ dmidecode -t 11
+         Handle 0x0E00, DMI type 11, 5 bytes
+         OEM Strings
+              String 1: cloud-init:ds=nocloud-net;s=http://10.10.0.1:8000/
+              String 2: anaconda:method=http://dl.fedoraproject.org/pub/fedora/linux/releases/25/x86_64/os
+              String 3: myapp:some extra data
+
 
 ``-smbios type=17[,loc_pfx=str][,bank=str][,manufacturer=str][,serial=str][,asset=str][,part=str][,speed=%d]``
     Specify SMBIOS type 17 fields
@@ -2409,6 +2462,10 @@ DEF("netdev", HAS_ARG, QEMU_OPTION_netdev,
 #ifdef CONFIG_POSIX
     "-netdev vhost-user,id=str,chardev=dev[,vhostforce=on|off]\n"
     "                configure a vhost-user network, backed by a chardev 'dev'\n"
+#endif
+#ifdef __linux__
+    "-netdev vhost-vdpa,id=str,vhostdev=/path/to/dev\n"
+    "                configure a vhost-vdpa network,Establish a vhost-vdpa netdev\n"
 #endif
     "-netdev hubport,id=str,hubid=n[,netdev=nd]\n"
     "                configure a hub port on the hub with ID 'n'\n", QEMU_ARCH_ALL)
@@ -2571,7 +2628,7 @@ SRST
 
         .. parsed-literal::
 
-            |qemu_system| -hda linux.img -boot n -device e1000,netdev=n1 \
+            |qemu_system| -hda linux.img -boot n -device e1000,netdev=n1 \\
                 -netdev user,id=n1,tftp=/path/to/tftp/files,bootfile=/pxelinux.0
 
     ``smb=dir[,smbserver=addr]``
@@ -2662,7 +2719,7 @@ SRST
     disable script execution.
 
     If running QEMU as an unprivileged user, use the network helper
-    helper to configure the TAP interface and attach it to the bridge.
+    to configure the TAP interface and attach it to the bridge.
     The default network helper executable is
     ``/path/to/qemu-bridge-helper`` and the default bridge device is
     ``br0``.
@@ -2681,15 +2738,15 @@ SRST
 
         #launch a QEMU instance with two NICs, each one connected
         #to a TAP device
-        |qemu_system| linux.img \
-                -netdev tap,id=nd0,ifname=tap0 -device e1000,netdev=nd0 \
+        |qemu_system| linux.img \\
+                -netdev tap,id=nd0,ifname=tap0 -device e1000,netdev=nd0 \\
                 -netdev tap,id=nd1,ifname=tap1 -device rtl8139,netdev=nd1
 
     .. parsed-literal::
 
         #launch a QEMU instance with the default network helper to
         #connect a TAP device to bridge br0
-        |qemu_system| linux.img -device virtio-net-pci,netdev=n1 \
+        |qemu_system| linux.img -device virtio-net-pci,netdev=n1 \\
                 -netdev tap,id=n1,"helper=/path/to/qemu-bridge-helper"
 
 ``-netdev bridge,id=id[,br=bridge][,helper=helper]``
@@ -2727,12 +2784,12 @@ SRST
     .. parsed-literal::
 
         # launch a first QEMU instance
-        |qemu_system| linux.img \
-                         -device e1000,netdev=n1,mac=52:54:00:12:34:56 \
+        |qemu_system| linux.img \\
+                         -device e1000,netdev=n1,mac=52:54:00:12:34:56 \\
                          -netdev socket,id=n1,listen=:1234
         # connect the network of this instance to the network of the first instance
-        |qemu_system| linux.img \
-                         -device e1000,netdev=n2,mac=52:54:00:12:34:57 \
+        |qemu_system| linux.img \\
+                         -device e1000,netdev=n2,mac=52:54:00:12:34:57 \\
                          -netdev socket,id=n2,connect=127.0.0.1:1234
 
 ``-netdev socket,id=id[,fd=h][,mcast=maddr:port[,localaddr=addr]]``
@@ -2754,16 +2811,16 @@ SRST
     .. parsed-literal::
 
         # launch one QEMU instance
-        |qemu_system| linux.img \
-                         -device e1000,netdev=n1,mac=52:54:00:12:34:56 \
+        |qemu_system| linux.img \\
+                         -device e1000,netdev=n1,mac=52:54:00:12:34:56 \\
                          -netdev socket,id=n1,mcast=230.0.0.1:1234
         # launch another QEMU instance on same "bus"
-        |qemu_system| linux.img \
-                         -device e1000,netdev=n2,mac=52:54:00:12:34:57 \
+        |qemu_system| linux.img \\
+                         -device e1000,netdev=n2,mac=52:54:00:12:34:57 \\
                          -netdev socket,id=n2,mcast=230.0.0.1:1234
         # launch yet another QEMU instance on same "bus"
-        |qemu_system| linux.img \
-                         -device e1000,netdev=n3,mac=52:54:00:12:34:58 \
+        |qemu_system| linux.img \\
+                         -device e1000,netdev=n3,mac=52:54:00:12:34:58 \\
                          -netdev socket,id=n3,mcast=230.0.0.1:1234
 
     Example (User Mode Linux compat.):
@@ -2771,8 +2828,8 @@ SRST
     .. parsed-literal::
 
         # launch QEMU instance (note mcast address selected is UML's default)
-        |qemu_system| linux.img \
-                         -device e1000,netdev=n1,mac=52:54:00:12:34:56 \
+        |qemu_system| linux.img \\
+                         -device e1000,netdev=n1,mac=52:54:00:12:34:56 \\
                          -netdev socket,id=n1,mcast=239.192.168.1:1102
         # launch UML
         /path/to/linux ubd0=/path/to/root_fs eth0=mcast
@@ -2781,8 +2838,8 @@ SRST
 
     .. parsed-literal::
 
-        |qemu_system| linux.img \
-                         -device e1000,netdev=n1,mac=52:54:00:12:34:56 \
+        |qemu_system| linux.img \\
+                         -device e1000,netdev=n1,mac=52:54:00:12:34:56 \\
                          -netdev socket,id=n1,mcast=239.192.168.1:1102,localaddr=1.2.3.4
 
 ``-netdev l2tpv3,id=id,src=srcaddr,dst=dstaddr[,srcport=srcport][,dstport=dstport],txsession=txsession[,rxsession=rxsession][,ipv6][,udp][,cookie64][,counter][,pincounter][,txcookie=txcookie][,rxcookie=rxcookie][,offset=offset]``
@@ -2838,9 +2895,9 @@ SRST
 
         # Setup tunnel on linux host using raw ip as encapsulation
         # on 1.2.3.4
-        ip l2tp add tunnel remote 4.3.2.1 local 1.2.3.4 tunnel_id 1 peer_tunnel_id 1 \
+        ip l2tp add tunnel remote 4.3.2.1 local 1.2.3.4 tunnel_id 1 peer_tunnel_id 1 \\
             encap udp udp_sport 16384 udp_dport 16384
-        ip l2tp add session tunnel_id 1 name vmtunnel0 session_id \
+        ip l2tp add session tunnel_id 1 name vmtunnel0 session_id \\
             0xFFFFFFFF peer_session_id 0xFFFFFFFF
         ifconfig vmtunnel0 mtu 1500
         ifconfig vmtunnel0 up
@@ -2850,7 +2907,7 @@ SRST
         # on 4.3.2.1
         # launch QEMU instance - if your network has reorder or is very lossy add ,pincounter
 
-        |qemu_system| linux.img -device e1000,netdev=n1 \
+        |qemu_system| linux.img -device e1000,netdev=n1 \\
             -netdev l2tpv3,id=n1,src=4.2.3.1,dst=1.2.3.4,udp,srcport=16384,dstport=16384,rxsession=0xffffffff,txsession=0xffffffff,counter
 
 ``-netdev vde,id=id[,sock=socketpath][,port=n][,group=groupname][,mode=octalmode]``
@@ -2887,6 +2944,14 @@ SRST
              -chardev socket,id=chr0,path=/path/to/socket \
              -netdev type=vhost-user,id=net0,chardev=chr0 \
              -device virtio-net-pci,netdev=net0
+
+``-netdev vhost-vdpa,vhostdev=/path/to/dev``
+    Establish a vhost-vdpa netdev.
+
+    vDPA device is a device that uses a datapath which complies with
+    the virtio specifications with a vendor specific control path.
+    vDPA devices can be both physically located on the hardware or
+    emulated by software.
 
 ``-netdev hubport,id=id,hubid=hubid[,netdev=nd]``
     Create a hub port on the emulated hub with ID hubid.
@@ -2930,7 +2995,7 @@ DEF("chardev", HAS_ARG, QEMU_OPTION_chardev,
     "         [,server][,nowait][,telnet][,websocket][,reconnect=seconds][,mux=on|off]\n"
     "         [,logfile=PATH][,logappend=on|off][,tls-creds=ID][,tls-authz=ID] (tcp)\n"
     "-chardev socket,id=id,path=path[,server][,nowait][,telnet][,websocket][,reconnect=seconds]\n"
-    "         [,mux=on|off][,logfile=PATH][,logappend=on|off] (unix)\n"
+    "         [,mux=on|off][,logfile=PATH][,logappend=on|off][,abstract=on|off][,tight=on|off] (unix)\n"
     "-chardev udp,id=id[,host=host],port=port[,localaddr=localaddr]\n"
     "         [,localport=localport][,ipv4][,ipv6][,mux=on|off]\n"
     "         [,logfile=PATH][,logappend=on|off]\n"
@@ -3017,7 +3082,9 @@ The general form of a character device option is:
         -serial chardev:char1
 
     When you're using a multiplexed character device, some escape
-    sequences are interpreted in the input. See :ref:`mux_005fkeys`.
+    sequences are interpreted in the input. See the chapter about
+    :ref:`keys in the character backend multiplexer` in the
+    System Emulation Users Guide for more details.
 
     Note that some other command line options may implicitly create
     multiplexed character backends; for instance ``-serial mon:stdio``
@@ -3097,9 +3164,13 @@ The available backends are:
 
         ``nodelay`` disables the Nagle algorithm.
 
-    ``unix options: path=path``
+    ``unix options: path=path[,abstract=on|off][,tight=on|off]``
         ``path`` specifies the local path of the unix socket. ``path``
         is required.
+        ``abstract`` specifies the use of the abstract socket namespace,
+        rather than the filesystem.  Optional, defaults to false.
+        ``tight`` sets the socket length of abstract sockets to their minimum,
+        rather than the full sun_path length.  Optional, defaults to true.
 
 ``-chardev udp,id=id[,host=host],port=port[,localaddr=localaddr][,localport=localport][,ipv4][,ipv6]``
     Sends all traffic from the guest to a remote host over UDP.
@@ -3686,8 +3757,8 @@ DEF("gdb", HAS_ARG, QEMU_OPTION_gdb, \
     QEMU_ARCH_ALL)
 SRST
 ``-gdb dev``
-    Accept a gdb connection on device dev (see
-    :ref:`gdb_005fusage`). Note that this option does not pause QEMU
+    Accept a gdb connection on device dev (see the :ref:`GDB usage` chapter
+    in the System Emulation Users Guide). Note that this option does not pause QEMU
     execution -- if you want QEMU to not start the guest until you
     connect with gdb and issue a ``continue`` command, you will need to
     also pass the ``-S`` option to QEMU.
@@ -3712,7 +3783,7 @@ DEF("s", 0, QEMU_OPTION_s, \
 SRST
 ``-s``
     Shorthand for -gdb tcp::1234, i.e. open a gdbserver on TCP port 1234
-    (see :ref:`gdb_005fusage`).
+    (see the :ref:`GDB usage` chapter in the System Emulation Users Guide).
 ERST
 
 DEF("d", HAS_ARG, QEMU_OPTION_d, \
@@ -4274,20 +4345,23 @@ SRST
     Enable FIPS 140-2 compliance mode.
 ERST
 
-HXCOMM Deprecated by -accel tcg
-DEF("no-kvm", 0, QEMU_OPTION_no_kvm, "", QEMU_ARCH_I386)
-
 DEF("msg", HAS_ARG, QEMU_OPTION_msg,
-    "-msg timestamp[=on|off]\n"
+    "-msg [timestamp[=on|off]][,guest-name=[on|off]]\n"
     "                control error message format\n"
-    "                timestamp=on enables timestamps (default: off)\n",
+    "                timestamp=on enables timestamps (default: off)\n"
+    "                guest-name=on enables guest name prefix but only if\n"
+    "                              -name guest option is set (default: off)\n",
     QEMU_ARCH_ALL)
 SRST
-``-msg timestamp[=on|off]``
+``-msg [timestamp[=on|off]][,guest-name[=on|off]]``
     Control error message format.
 
     ``timestamp=on|off``
         Prefix messages with a timestamp. Default is off.
+
+    ``guest-name=on|off``
+        Prefix messages with guest name but only if -name guest option is set
+        otherwise the option is ignored. Default is off.
 ERST
 
 DEF("dump-vmstate", HAS_ARG, QEMU_OPTION_dump_vmstate,
@@ -4554,6 +4628,43 @@ SRST
         string as described at
         https://gnutls.org/manual/html_node/Priority-Strings.html.
 
+    ``-object tls-cipher-suites,id=id,priority=priority``
+        Creates a TLS cipher suites object, which can be used to control
+        the TLS cipher/protocol algorithms that applications are permitted
+        to use.
+
+        The ``id`` parameter is a unique ID which frontends will use to
+        access the ordered list of permitted TLS cipher suites from the
+        host.
+
+        The ``priority`` parameter allows to override the global default
+        priority used by gnutls. This can be useful if the system
+        administrator needs to use a weaker set of crypto priorities for
+        QEMU without potentially forcing the weakness onto all
+        applications. Or conversely if one wants wants a stronger
+        default for QEMU than for all other applications, they can do
+        this through this parameter. Its format is a gnutls priority
+        string as described at
+        https://gnutls.org/manual/html_node/Priority-Strings.html.
+
+        An example of use of this object is to control UEFI HTTPS Boot.
+        The tls-cipher-suites object exposes the ordered list of permitted
+        TLS cipher suites from the host side to the guest firmware, via
+        fw_cfg. The list is represented as an array of IANA_TLS_CIPHER
+        objects. The firmware uses the IANA_TLS_CIPHER array for configuring
+        guest-side TLS.
+
+        In the following example, the priority at which the host-side policy
+        is retrieved is given by the ``priority`` property.
+        Given that QEMU uses GNUTLS, ``priority=@SYSTEM`` may be used to
+        refer to /etc/crypto-policies/back-ends/gnutls.config.
+
+        .. parsed-literal::
+
+             # |qemu_system| \\
+                 -object tls-cipher-suites,id=mysuite0,priority=@SYSTEM \\
+                 -fw_cfg name=etc/edk2/https/ciphers,gen_id=mysuite0
+
     ``-object filter-buffer,id=id,netdev=netdevid,interval=t[,queue=all|rx|tx][,status=on|off][,position=head|tail|id=<id>][,insert=behind|before]``
         Interval t can't be 0, this filter batches the packet delivery:
         all packets arriving in a given interval on netdev netdevid are
@@ -4627,24 +4738,25 @@ SRST
         stored. The file format is libpcap, so it can be analyzed with
         tools such as tcpdump or Wireshark.
 
-    ``-object colo-compare,id=id,primary_in=chardevid,secondary_in=chardevid,outdev=chardevid,iothread=id[,vnet_hdr_support][,notify_dev=id][,compare_timeout=@var{ms}][,expired_scan_cycle=@var{ms}``
-        Colo-compare gets packet from primary\_inchardevid and
-        secondary\_inchardevid, than compare primary packet with
-        secondary packet. If the packets are same, we will output
-        primary packet to outdevchardevid, else we will notify
-        colo-frame do checkpoint and send primary packet to
-        outdevchardevid. In order to improve efficiency, we need to put
-        the task of comparison in another thread. If it has the
-        vnet\_hdr\_support flag, colo compare will send/recv packet with
-        vnet\_hdr\_len. Then compare\_timeout=@var{ms} determines the
-        maximum delay colo-compare wait for the packet.
-        The expired\_scan\_cycle=@var{ms} to set the period of scanning
-        expired primary node network packets.
-        If you want to use Xen COLO, will need the notify\_dev to
+    ``-object colo-compare,id=id,primary_in=chardevid,secondary_in=chardevid,outdev=chardevid,iothread=id[,vnet_hdr_support][,notify_dev=id][,compare_timeout=@var{ms}][,expired_scan_cycle=@var{ms}][,max_queue_size=@var{size}]``
+        Colo-compare gets packet from primary\_in chardevid and
+        secondary\_in, then compare whether the payload of primary packet
+        and secondary packet are the same. If same, it will output
+        primary packet to out\_dev, else it will notify COLO-framework to do
+        checkpoint and send primary packet to out\_dev. In order to
+        improve efficiency, we need to put the task of comparison in
+        another iothread. If it has the vnet\_hdr\_support flag,
+        colo compare will send/recv packet with vnet\_hdr\_len.
+        The compare\_timeout=@var{ms} determines the maximum time of the
+        colo-compare hold the packet. The expired\_scan\_cycle=@var{ms}
+        is to set the period of scanning expired primary node network packets.
+        The max\_queue\_size=@var{size} is to set the max compare queue
+        size depend on user environment.
+        If user want to use Xen COLO, need to add the notify\_dev to
         notify Xen colo-frame to do checkpoint.
 
-        we must use it with the help of filter-mirror and
-        filter-redirector.
+        COLO-compare must be used with the help of filter-mirror,
+        filter-redirector and filter-rewriter.
 
         ::
 
@@ -4713,10 +4825,10 @@ SRST
 
         .. parsed-literal::
 
-             # |qemu_system| \
-               [...] \
-                   -object cryptodev-backend-builtin,id=cryptodev0 \
-                   -device virtio-crypto-pci,id=crypto0,cryptodev=cryptodev0 \
+             # |qemu_system| \\
+               [...] \\
+                   -object cryptodev-backend-builtin,id=cryptodev0 \\
+                   -device virtio-crypto-pci,id=crypto0,cryptodev=cryptodev0 \\
                [...]
 
     ``-object cryptodev-vhost-user,id=id,chardev=chardevid[,queues=queues]``
@@ -4732,11 +4844,11 @@ SRST
 
         .. parsed-literal::
 
-             # |qemu_system| \
-               [...] \
-                   -chardev socket,id=chardev0,path=/path/to/socket \
-                   -object cryptodev-vhost-user,id=cryptodev0,chardev=chardev0 \
-                   -device virtio-crypto-pci,id=crypto0,cryptodev=cryptodev0 \
+             # |qemu_system| \\
+               [...] \\
+                   -chardev socket,id=chardev0,path=/path/to/socket \\
+                   -object cryptodev-vhost-user,id=cryptodev0,chardev=chardev0 \\
+                   -device virtio-crypto-pci,id=crypto0,cryptodev=cryptodev0 \\
                [...]
 
     ``-object secret,id=id,data=string,format=raw|base64[,keyid=secretid,iv=string]``
@@ -4814,9 +4926,9 @@ SRST
 
         .. parsed-literal::
 
-             # |qemu_system| \
-                 -object secret,id=secmaster0,format=base64,file=key.b64 \
-                 -object secret,id=sec0,keyid=secmaster0,format=base64,\
+             # |qemu_system| \\
+                 -object secret,id=secmaster0,format=base64,file=key.b64 \\
+                 -object secret,id=sec0,keyid=secmaster0,format=base64,\\
                      data=$SECRET,iv=$(<iv.b64)
 
     ``-object sev-guest,id=id,cbitpos=cbitpos,reduced-phys-bits=val,[sev-device=string,policy=policy,handle=handle,dh-cert-file=file,session-file=file]``
@@ -4863,10 +4975,10 @@ SRST
 
         .. parsed-literal::
 
-             # |qemu_system_x86| \
-                 ......
-                 -object sev-guest,id=sev0,cbitpos=47,reduced-phys-bits=5 \
-                 -machine ...,memory-encryption=sev0
+             # |qemu_system_x86| \\
+                 ...... \\
+                 -object sev-guest,id=sev0,cbitpos=47,reduced-phys-bits=5 \\
+                 -machine ...,memory-encryption=sev0 \\
                  .....
 
     ``-object authz-simple,id=id,identity=string``
@@ -4884,9 +4996,9 @@ SRST
 
         .. parsed-literal::
 
-             # |qemu_system| \
-                 ...
-                 -object 'authz-simple,id=auth0,identity=CN=laptop.example.com,,O=Example Org,,L=London,,ST=London,,C=GB' \
+             # |qemu_system| \\
+                 ... \\
+                 -object 'authz-simple,id=auth0,identity=CN=laptop.example.com,,O=Example Org,,L=London,,ST=London,,C=GB' \\
                  ...
 
         Note the use of quotes due to the x509 distinguished name
@@ -4935,9 +5047,9 @@ SRST
 
         .. parsed-literal::
 
-             # |qemu_system| \
-                 ...
-                 -object authz-simple,id=auth0,filename=/etc/qemu/vnc-sasl.acl,refresh=yes
+             # |qemu_system| \\
+                 ... \\
+                 -object authz-simple,id=auth0,filename=/etc/qemu/vnc-sasl.acl,refresh=yes \\
                  ...
 
     ``-object authz-pam,id=id,service=string``
@@ -4954,9 +5066,9 @@ SRST
 
         .. parsed-literal::
 
-             # |qemu_system| \
-                 ...
-                 -object authz-pam,id=auth0,service=qemu-vnc
+             # |qemu_system| \\
+                 ... \\
+                 -object authz-pam,id=auth0,service=qemu-vnc \\
                  ...
 
         There would then be a corresponding config file for PAM at

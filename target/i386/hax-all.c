@@ -28,12 +28,12 @@
 #include "exec/address-spaces.h"
 
 #include "qemu-common.h"
-#include "hax-i386.h"
 #include "sysemu/accel.h"
 #include "sysemu/reset.h"
 #include "sysemu/runstate.h"
-#include "qemu/main-loop.h"
 #include "hw/boards.h"
+
+#include "hax-cpus.h"
 
 #define DEBUG_HAX 0
 
@@ -232,10 +232,10 @@ int hax_init_vcpu(CPUState *cpu)
     return ret;
 }
 
-struct hax_vm *hax_vm_create(struct hax_state *hax)
+struct hax_vm *hax_vm_create(struct hax_state *hax, int max_cpus)
 {
     struct hax_vm *vm;
-    int vm_id = 0, ret;
+    int vm_id = 0, ret, i;
 
     if (hax_invalid_fd(hax->fd)) {
         return NULL;
@@ -243,6 +243,11 @@ struct hax_vm *hax_vm_create(struct hax_state *hax)
 
     if (hax->vm) {
         return hax->vm;
+    }
+
+    if (max_cpus > HAX_MAX_VCPU) {
+        fprintf(stderr, "Maximum VCPU number QEMU supported is %d\n", HAX_MAX_VCPU);
+        return NULL;
     }
 
     vm = g_new0(struct hax_vm, 1);
@@ -259,6 +264,12 @@ struct hax_vm *hax_vm_create(struct hax_state *hax)
         goto error;
     }
 
+    vm->numvcpus = max_cpus;
+    vm->vcpus = g_new0(struct hax_vcpu_state *, vm->numvcpus);
+    for (i = 0; i < vm->numvcpus; i++) {
+        vm->vcpus[i] = NULL;
+    }
+
     hax->vm = vm;
     return vm;
 
@@ -272,27 +283,20 @@ int hax_vm_destroy(struct hax_vm *vm)
 {
     int i;
 
-    for (i = 0; i < HAX_MAX_VCPU; i++)
+    for (i = 0; i < vm->numvcpus; i++)
         if (vm->vcpus[i]) {
             fprintf(stderr, "VCPU should be cleaned before vm clean\n");
             return -1;
         }
     hax_close_fd(vm->fd);
+    vm->numvcpus = 0;
+    g_free(vm->vcpus);
     g_free(vm);
     hax_global.vm = NULL;
     return 0;
 }
 
-static void hax_handle_interrupt(CPUState *cpu, int mask)
-{
-    cpu->interrupt_request |= mask;
-
-    if (!qemu_cpu_is_self(cpu)) {
-        qemu_cpu_kick(cpu);
-    }
-}
-
-static int hax_init(ram_addr_t ram_size)
+static int hax_init(ram_addr_t ram_size, int max_cpus)
 {
     struct hax_state *hax = NULL;
     struct hax_qemu_version qversion;
@@ -324,7 +328,7 @@ static int hax_init(ram_addr_t ram_size)
         goto error;
     }
 
-    hax->vm = hax_vm_create(hax);
+    hax->vm = hax_vm_create(hax, max_cpus);
     if (!hax->vm) {
         fprintf(stderr, "Failed to create HAX VM\n");
         ret = -EINVAL;
@@ -336,7 +340,6 @@ static int hax_init(ram_addr_t ram_size)
     qversion.cur_version = hax_cur_version;
     qversion.min_version = hax_min_version;
     hax_notify_qemu_version(hax->vm->fd, &qversion);
-    cpu_interrupt_handler = hax_handle_interrupt;
 
     return ret;
   error:
@@ -352,7 +355,7 @@ static int hax_init(ram_addr_t ram_size)
 
 static int hax_accel_init(MachineState *ms)
 {
-    int ret = hax_init(ms->ram_size);
+    int ret = hax_init(ms->ram_size, (int)ms->smp.max_cpus);
 
     if (ret && (ret != -ENOSPC)) {
         fprintf(stderr, "No accelerator found.\n");
@@ -360,6 +363,9 @@ static int hax_accel_init(MachineState *ms)
         fprintf(stdout, "HAX is %s and emulator runs in %s mode.\n",
                 !ret ? "working" : "not working",
                 !ret ? "fast virt" : "emulation");
+    }
+    if (ret == 0) {
+        cpus_register_accel(&hax_cpus);
     }
     return ret;
 }

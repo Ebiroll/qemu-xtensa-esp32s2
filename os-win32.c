@@ -57,12 +57,6 @@ void os_setup_early_signal_handling(void)
     atexit(os_undo_timer_resolution);
 }
 
-/* Look for support files in the same directory as the executable.  */
-char *os_find_datadir(void)
-{
-    return qemu_get_exec_dir();
-}
-
 void os_set_line_buffering(void)
 {
     setbuf(stdout, NULL);

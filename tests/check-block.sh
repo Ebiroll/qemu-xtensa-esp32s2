@@ -21,7 +21,17 @@ if grep -q "CONFIG_GPROF=y" config-host.mak 2>/dev/null ; then
     exit 0
 fi
 
-if grep -q "CFLAGS.*-fsanitize" config-host.mak 2>/dev/null ; then
+# Disable tests with any sanitizer except for SafeStack
+CFLAGS=$( grep "CFLAGS.*-fsanitize" config-host.mak 2>/dev/null )
+SANITIZE_FLAGS=""
+#Remove all occurrencies of -fsanitize=safe-stack
+for i in ${CFLAGS}; do
+        if [ "${i}" != "-fsanitize=safe-stack" ]; then
+                SANITIZE_FLAGS="${SANITIZE_FLAGS} ${i}"
+        fi
+done
+if echo ${SANITIZE_FLAGS} | grep -q "\-fsanitize" 2>/dev/null; then
+    # Have a sanitize flag that is not allowed, stop
     echo "Sanitizers are enabled ==> Not running the qemu-iotests."
     exit 0
 fi
@@ -36,6 +46,11 @@ if ! command -v bash >/dev/null 2>&1 ; then
     exit 0
 fi
 
+if LANG=C bash --version | grep -q 'GNU bash, version [123]' ; then
+    echo "bash version too old ==> Not running the qemu-iotests."
+    exit 0
+fi
+
 if ! (sed --version | grep 'GNU sed') > /dev/null 2>&1 ; then
     if ! command -v gsed >/dev/null 2>&1; then
         echo "GNU sed not available ==> Not running the qemu-iotests."
@@ -44,6 +59,9 @@ if ! (sed --version | grep 'GNU sed') > /dev/null 2>&1 ; then
 fi
 
 cd tests/qemu-iotests
+
+# QEMU_CHECK_BLOCK_AUTO is used to disable some unstable sub-tests
+export QEMU_CHECK_BLOCK_AUTO=1
 
 ret=0
 for fmt in $format_list ; do

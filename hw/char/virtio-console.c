@@ -19,17 +19,19 @@
 #include "hw/virtio/virtio-serial.h"
 #include "qapi/error.h"
 #include "qapi/qapi-events-char.h"
+#include "qom/object.h"
 
 #define TYPE_VIRTIO_CONSOLE_SERIAL_PORT "virtserialport"
-#define VIRTIO_CONSOLE(obj) \
-    OBJECT_CHECK(VirtConsole, (obj), TYPE_VIRTIO_CONSOLE_SERIAL_PORT)
+typedef struct VirtConsole VirtConsole;
+DECLARE_INSTANCE_CHECKER(VirtConsole, VIRTIO_CONSOLE,
+                         TYPE_VIRTIO_CONSOLE_SERIAL_PORT)
 
-typedef struct VirtConsole {
+struct VirtConsole {
     VirtIOSerialPort parent_obj;
 
     CharBackend chr;
     guint watch;
-} VirtConsole;
+};
 
 /*
  * Callback function that's called from chardevs when backend becomes
@@ -249,7 +251,7 @@ static void virtconsole_realize(DeviceState *dev, Error **errp)
     }
 }
 
-static void virtconsole_unrealize(DeviceState *dev, Error **errp)
+static void virtconsole_unrealize(DeviceState *dev)
 {
     VirtConsole *vcon = VIRTIO_CONSOLE(dev);
 

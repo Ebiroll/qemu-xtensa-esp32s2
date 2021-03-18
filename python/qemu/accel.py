@@ -17,18 +17,21 @@ accelerators.
 import logging
 import os
 import subprocess
+from typing import List, Optional
+
 
 LOG = logging.getLogger(__name__)
 
 # Mapping host architecture to any additional architectures it can
 # support which often includes its 32 bit cousin.
 ADDITIONAL_ARCHES = {
-    "x86_64" : "i386",
-    "aarch64" : "armhf",
-    "ppc64le" : "ppc64",
+    "x86_64": "i386",
+    "aarch64": "armhf",
+    "ppc64le": "ppc64",
 }
 
-def list_accel(qemu_bin):
+
+def list_accel(qemu_bin: str) -> List[str]:
     """
     List accelerators enabled in the QEMU binary.
 
@@ -47,7 +50,9 @@ def list_accel(qemu_bin):
     # Skip the first line which is the header.
     return [acc.strip() for acc in out.splitlines()[1:]]
 
-def kvm_available(target_arch=None, qemu_bin=None):
+
+def kvm_available(target_arch: Optional[str] = None,
+                  qemu_bin: Optional[str] = None) -> bool:
     """
     Check if KVM is available using the following heuristic:
       - Kernel module is present in the host;
@@ -69,7 +74,8 @@ def kvm_available(target_arch=None, qemu_bin=None):
         return False
     return True
 
-def tcg_available(qemu_bin):
+
+def tcg_available(qemu_bin: str) -> bool:
     """
     Check if TCG is available.
 

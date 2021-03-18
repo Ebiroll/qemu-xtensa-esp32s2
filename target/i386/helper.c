@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -18,6 +18,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "qapi/qapi-events-run-state.h"
 #include "cpu.h"
 #include "exec/exec-all.h"
 #include "qemu/qemu-print.h"
@@ -370,10 +371,11 @@ void x86_cpu_dump_local_apic_state(CPUState *cs, int flags)
     dump_apic_lvt("LVTTHMR", lvt[APIC_LVT_THERMAL], false);
     dump_apic_lvt("LVTT", lvt[APIC_LVT_TIMER], true);
 
-    qemu_printf("Timer\t DCR=0x%x (divide by %u) initial_count = %u\n",
+    qemu_printf("Timer\t DCR=0x%x (divide by %u) initial_count = %u"
+                " current_count = %u\n",
                 s->divide_conf & APIC_DCR_MASK,
                 divider_conf(s->divide_conf),
-                s->initial_count);
+                s->initial_count, apic_get_current_count(s));
 
     qemu_printf("SPIV\t 0x%08x APIC %s, focus=%s, spurious vec %u\n",
                 s->spurious_vec,
@@ -544,6 +546,7 @@ void x86_cpu_dump_state(CPUState *cs, FILE *f, int flags)
         for(i = 0; i < 8; i++) {
             fptag |= ((!env->fptags[i]) << i);
         }
+        update_mxcsr_from_sse_status(env);
         qemu_fprintf(f, "FCW=%04x FSW=%04x [ST=%d] FTW=%02x MXCSR=%08x\n",
                      env->fpuc,
                      (env->fpus & ~0x3800) | (env->fpstt & 0x7) << 11,
@@ -849,22 +852,35 @@ typedef struct MCEInjectionParams {
     int flags;
 } MCEInjectionParams;
 
+static void emit_guest_memory_failure(MemoryFailureAction action, bool ar,
+                                      bool recursive)
+{
+    MemoryFailureFlags mff = {.action_required = ar, .recursive = recursive};
+
+    qapi_event_send_memory_failure(MEMORY_FAILURE_RECIPIENT_GUEST, action,
+                                   &mff);
+}
+
 static void do_inject_x86_mce(CPUState *cs, run_on_cpu_data data)
 {
     MCEInjectionParams *params = data.host_ptr;
     X86CPU *cpu = X86_CPU(cs);
     CPUX86State *cenv = &cpu->env;
     uint64_t *banks = cenv->mce_banks + 4 * params->bank;
+    g_autofree char *msg = NULL;
+    bool need_reset = false;
+    bool recursive;
+    bool ar = !!(params->status & MCI_STATUS_AR);
 
     cpu_synchronize_state(cs);
+    recursive = !!(cenv->mcg_status & MCG_STATUS_MCIP);
 
     /*
      * If there is an MCE exception being processed, ignore this SRAO MCE
      * unless unconditional injection was requested.
      */
-    if (!(params->flags & MCE_INJECT_UNCOND_AO)
-        && !(params->status & MCI_STATUS_AR)
-        && (cenv->mcg_status & MCG_STATUS_MCIP)) {
+    if (!(params->flags & MCE_INJECT_UNCOND_AO) && !ar && recursive) {
+        emit_guest_memory_failure(MEMORY_FAILURE_ACTION_IGNORE, ar, recursive);
         return;
     }
 
@@ -892,16 +908,25 @@ static void do_inject_x86_mce(CPUState *cs, run_on_cpu_data data)
             return;
         }
 
-        if ((cenv->mcg_status & MCG_STATUS_MCIP) ||
-            !(cenv->cr[4] & CR4_MCE_MASK)) {
-            monitor_printf(params->mon,
-                           "CPU %d: Previous MCE still in progress, raising"
-                           " triple fault\n",
-                           cs->cpu_index);
-            qemu_log_mask(CPU_LOG_RESET, "Triple fault\n");
+        if (!(cenv->cr[4] & CR4_MCE_MASK)) {
+            need_reset = true;
+            msg = g_strdup_printf("CPU %d: MCE capability is not enabled, "
+                                  "raising triple fault", cs->cpu_index);
+        } else if (recursive) {
+            need_reset = true;
+            msg = g_strdup_printf("CPU %d: Previous MCE still in progress, "
+                                  "raising triple fault", cs->cpu_index);
+        }
+
+        if (need_reset) {
+            emit_guest_memory_failure(MEMORY_FAILURE_ACTION_RESET, ar,
+                                      recursive);
+            monitor_printf(params->mon, "%s", msg);
+            qemu_log_mask(CPU_LOG_RESET, "%s\n", msg);
             qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
             return;
         }
+
         if (banks[1] & MCI_STATUS_VAL) {
             params->status |= MCI_STATUS_OVER;
         }
@@ -921,6 +946,8 @@ static void do_inject_x86_mce(CPUState *cs, run_on_cpu_data data)
     } else {
         banks[1] |= MCI_STATUS_OVER;
     }
+
+    emit_guest_memory_failure(MEMORY_FAILURE_ACTION_INJECT, ar, recursive);
 }
 
 void cpu_x86_inject_mce(Monitor *mon, X86CPU *cpu, int bank,

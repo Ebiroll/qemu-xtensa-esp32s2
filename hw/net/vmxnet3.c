@@ -35,6 +35,7 @@
 #include "vmware_utils.h"
 #include "net_tx_pkt.h"
 #include "net_rx_pkt.h"
+#include "qom/object.h"
 
 #define PCI_DEVICE_ID_VMWARE_VMXNET3_REVISION 0x1
 #define VMXNET3_MSIX_BAR_SIZE 0x2000
@@ -128,15 +129,14 @@
 
 #define VMXNET_FLAG_IS_SET(field, flag) (((field) & (flag)) == (flag))
 
-typedef struct VMXNET3Class {
+struct VMXNET3Class {
     PCIDeviceClass parent_class;
     DeviceRealize parent_dc_realize;
-} VMXNET3Class;
+};
+typedef struct VMXNET3Class VMXNET3Class;
 
-#define VMXNET3_DEVICE_CLASS(klass) \
-    OBJECT_CLASS_CHECK(VMXNET3Class, (klass), TYPE_VMXNET3)
-#define VMXNET3_DEVICE_GET_CLASS(obj) \
-    OBJECT_GET_CLASS(VMXNET3Class, (obj), TYPE_VMXNET3)
+DECLARE_CLASS_CHECKERS(VMXNET3Class, VMXNET3_DEVICE,
+                       TYPE_VMXNET3)
 
 static inline void vmxnet3_ring_init(PCIDevice *d,
                                      Vmxnet3Ring *ring,
@@ -2237,7 +2237,7 @@ static void vmxnet3_instance_init(Object *obj)
     VMXNET3State *s = VMXNET3(obj);
     device_add_bootindex_property(obj, &s->conf.bootindex,
                                   "bootindex", "/ethernet-phy@0",
-                                  DEVICE(obj), NULL);
+                                  DEVICE(obj));
 }
 
 static void vmxnet3_pci_uninit(PCIDevice *pci_dev)

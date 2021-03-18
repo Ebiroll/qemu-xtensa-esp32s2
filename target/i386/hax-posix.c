@@ -14,7 +14,8 @@
 #include "qemu/osdep.h"
 #include <sys/ioctl.h>
 
-#include "target/i386/hax-i386.h"
+#include "sysemu/cpus.h"
+#include "hax-cpus.h"
 
 hax_fd hax_mod_open(void)
 {
@@ -23,7 +24,7 @@ hax_fd hax_mod_open(void)
         fprintf(stderr, "Failed to open the hax module\n");
     }
 
-    fcntl(fd, F_SETFD, FD_CLOEXEC);
+    qemu_set_cloexec(fd);
 
     return fd;
 }
@@ -147,7 +148,7 @@ hax_fd hax_host_open_vm(struct hax_state *hax, int vm_id)
     fd = open(vm_name, O_RDWR);
     g_free(vm_name);
 
-    fcntl(fd, F_SETFD, FD_CLOEXEC);
+    qemu_set_cloexec(fd);
 
     return fd;
 }
@@ -200,7 +201,7 @@ hax_fd hax_host_open_vcpu(int vmid, int vcpuid)
     if (fd < 0) {
         fprintf(stderr, "Failed to open the vcpu devfs\n");
     }
-    fcntl(fd, F_SETFD, FD_CLOEXEC);
+    qemu_set_cloexec(fd);
     return fd;
 }
 
@@ -291,4 +292,14 @@ int hax_inject_interrupt(CPUArchState *env, int vector)
     }
 
     return ioctl(fd, HAX_VCPU_IOCTL_INTERRUPT, &vector);
+}
+
+void hax_kick_vcpu_thread(CPUState *cpu)
+{
+    /*
+     * FIXME: race condition with the exit_request check in
+     * hax_vcpu_hax_exec
+     */
+    cpu->exit_request = 1;
+    cpus_kick_thread(cpu);
 }

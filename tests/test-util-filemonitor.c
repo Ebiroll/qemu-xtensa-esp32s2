@@ -23,6 +23,8 @@
 #include "qapi/error.h"
 #include "qemu/filemonitor.h"
 
+#include <glib/gstdio.h>
+
 #include <utime.h>
 
 enum {
@@ -495,6 +497,7 @@ test_file_monitor_events(void)
             if (*op->watchid < 0) {
                 g_printerr("Unable to add watch %s",
                            error_get_pretty(local_err));
+                error_free(local_err);
                 goto cleanup;
             }
             if (debug) {
@@ -616,7 +619,7 @@ test_file_monitor_events(void)
             if (debug) {
                 g_printerr("Mkdir %s\n", pathsrc);
             }
-            if (mkdir(pathsrc, 0700) < 0) {
+            if (g_mkdir_with_parents(pathsrc, 0700) < 0) {
                 g_printerr("Unable to mkdir %s: %s",
                            pathsrc, strerror(errno));
                 goto cleanup;

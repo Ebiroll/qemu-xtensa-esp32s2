@@ -7,7 +7,7 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/hw.h"
+#include "qemu/log.h"
 #include "hw/irq.h"
 #include "net/net.h"
 #include "qemu/module.h"
@@ -32,7 +32,7 @@ do { printf("mcf_fec: " fmt , ## __VA_ARGS__); } while (0)
 #define FEC_MAX_FRAME_SIZE 2032
 #define FEC_MIB_SIZE 64
 
-typedef struct {
+struct mcf_fec_state {
     SysBusDevice parent_obj;
 
     MemoryRegion iomem;
@@ -56,7 +56,7 @@ typedef struct {
     uint32_t etdsr;
     uint32_t emrbr;
     uint32_t mib[FEC_MIB_SIZE];
-} mcf_fec_state;
+};
 
 #define FEC_INT_HB   0x80000000
 #define FEC_INT_BABR 0x40000000
@@ -392,7 +392,8 @@ static uint64_t mcf_fec_read(void *opaque, hwaddr addr,
     case 0x188: return s->emrbr;
     case 0x200 ... 0x2e0: return s->mib[(addr & 0x1ff) / 4];
     default:
-        hw_error("mcf_fec_read: Bad address 0x%x\n", (int)addr);
+        qemu_log_mask(LOG_GUEST_ERROR, "%s: Bad address 0x%" HWADDR_PRIX "\n",
+                      __func__, addr);
         return 0;
     }
 }
@@ -492,7 +493,9 @@ static void mcf_fec_write(void *opaque, hwaddr addr,
         s->mib[(addr & 0x1ff) / 4] = value;
         break;
     default:
-        hw_error("mcf_fec_write Bad address 0x%x\n", (int)addr);
+        qemu_log_mask(LOG_GUEST_ERROR, "%s: Bad address 0x%" HWADDR_PRIX "\n",
+                      __func__, addr);
+        return;
     }
     mcf_fec_update(s);
 }

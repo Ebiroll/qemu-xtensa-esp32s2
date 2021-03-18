@@ -22,10 +22,13 @@
 #include "hw/irq.h"
 #include "hw/qdev-properties.h"
 #include "hw/ssi/ssi.h"
+#include "hw/sd/sd.h"
 #include "chardev/char-fe.h"
 #include "sysemu/blockdev.h"
 #include "sysemu/qtest.h"
 #include "qemu/cutils.h"
+#include "qemu/log.h"
+#include "qom/object.h"
 
 static struct {
     hwaddr io_base;
@@ -112,7 +115,9 @@ static uint64_t pxa2xx_pm_read(void *opaque, hwaddr addr,
         return s->pm_regs[addr >> 2];
     default:
     fail:
-        printf("%s: Bad register " REG_FMT "\n", __func__, addr);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: Bad read offset 0x%"HWADDR_PRIx"\n",
+                      __func__, addr);
         break;
     }
     return 0;
@@ -143,8 +148,9 @@ static void pxa2xx_pm_write(void *opaque, hwaddr addr,
             s->pm_regs[addr >> 2] = value;
             break;
         }
-
-        printf("%s: Bad register " REG_FMT "\n", __func__, addr);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: Bad write offset 0x%"HWADDR_PRIx"\n",
+                      __func__, addr);
         break;
     }
 }
@@ -185,7 +191,9 @@ static uint64_t pxa2xx_cm_read(void *opaque, hwaddr addr,
         return s->cm_regs[CCCR >> 2] | (3 << 28);
 
     default:
-        printf("%s: Bad register " REG_FMT "\n", __func__, addr);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: Bad read offset 0x%"HWADDR_PRIx"\n",
+                      __func__, addr);
         break;
     }
     return 0;
@@ -210,7 +218,9 @@ static void pxa2xx_cm_write(void *opaque, hwaddr addr,
         break;
 
     default:
-        printf("%s: Bad register " REG_FMT "\n", __func__, addr);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: Bad write offset 0x%"HWADDR_PRIx"\n",
+                      __func__, addr);
         break;
     }
 }
@@ -415,7 +425,9 @@ static uint64_t pxa2xx_mm_read(void *opaque, hwaddr addr,
             return s->mm_regs[addr >> 2];
         /* fall through */
     default:
-        printf("%s: Bad register " REG_FMT "\n", __func__, addr);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: Bad read offset 0x%"HWADDR_PRIx"\n",
+                      __func__, addr);
         break;
     }
     return 0;
@@ -432,9 +444,11 @@ static void pxa2xx_mm_write(void *opaque, hwaddr addr,
             s->mm_regs[addr >> 2] = value;
             break;
         }
-
+        /* fallthrough */
     default:
-        printf("%s: Bad register " REG_FMT "\n", __func__, addr);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: Bad write offset 0x%"HWADDR_PRIx"\n",
+                      __func__, addr);
         break;
     }
 }
@@ -456,11 +470,10 @@ static const VMStateDescription vmstate_pxa2xx_mm = {
 };
 
 #define TYPE_PXA2XX_SSP "pxa2xx-ssp"
-#define PXA2XX_SSP(obj) \
-    OBJECT_CHECK(PXA2xxSSPState, (obj), TYPE_PXA2XX_SSP)
+OBJECT_DECLARE_SIMPLE_TYPE(PXA2xxSSPState, PXA2XX_SSP)
 
 /* Synchronous Serial Ports */
-typedef struct {
+struct PXA2xxSSPState {
     /*< private >*/
     SysBusDevice parent_obj;
     /*< public >*/
@@ -482,7 +495,7 @@ typedef struct {
     uint32_t rx_fifo[16];
     uint32_t rx_level;
     uint32_t rx_start;
-} PXA2xxSSPState;
+};
 
 static bool pxa2xx_ssp_vmstate_validate(void *opaque, int version_id)
 {
@@ -641,7 +654,9 @@ static uint64_t pxa2xx_ssp_read(void *opaque, hwaddr addr,
     case SSACD:
         return s->ssacd;
     default:
-        printf("%s: Bad register " REG_FMT "\n", __func__, addr);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: Bad read offset 0x%"HWADDR_PRIx"\n",
+                      __func__, addr);
         break;
     }
     return 0;
@@ -660,7 +675,7 @@ static void pxa2xx_ssp_write(void *opaque, hwaddr addr,
         if (value & SSCR0_MOD)
             printf("%s: Attempt to use network mode\n", __func__);
         if (s->enable && SSCR0_DSS(value) < 4)
-            printf("%s: Wrong data size: %i bits\n", __func__,
+            printf("%s: Wrong data size: %u bits\n", __func__,
                             SSCR0_DSS(value));
         if (!(value & SSCR0_SSE)) {
             s->sssr = 0;
@@ -733,7 +748,9 @@ static void pxa2xx_ssp_write(void *opaque, hwaddr addr,
         break;
 
     default:
-        printf("%s: Bad register " REG_FMT "\n", __func__, addr);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: Bad write offset 0x%"HWADDR_PRIx"\n",
+                      __func__, addr);
         break;
     }
 }
@@ -792,10 +809,9 @@ static void pxa2xx_ssp_init(Object *obj)
 #define PIAR		0x38	/* RTC Periodic Interrupt Alarm register */
 
 #define TYPE_PXA2XX_RTC "pxa2xx_rtc"
-#define PXA2XX_RTC(obj) \
-    OBJECT_CHECK(PXA2xxRTCState, (obj), TYPE_PXA2XX_RTC)
+OBJECT_DECLARE_SIMPLE_TYPE(PXA2xxRTCState, PXA2XX_RTC)
 
-typedef struct {
+struct PXA2xxRTCState {
     /*< private >*/
     SysBusDevice parent_obj;
     /*< public >*/
@@ -826,7 +842,7 @@ typedef struct {
     QEMUTimer *rtc_swal2;
     QEMUTimer *rtc_pi;
     qemu_irq rtc_irq;
-} PXA2xxRTCState;
+};
 
 static inline void pxa2xx_rtc_int_update(PXA2xxRTCState *s)
 {
@@ -995,7 +1011,9 @@ static uint64_t pxa2xx_rtc_read(void *opaque, hwaddr addr,
         else
             return s->last_swcr;
     default:
-        printf("%s: Bad register " REG_FMT "\n", __func__, addr);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: Bad read offset 0x%"HWADDR_PRIx"\n",
+                      __func__, addr);
         break;
     }
     return 0;
@@ -1101,7 +1119,9 @@ static void pxa2xx_rtc_write(void *opaque, hwaddr addr,
         break;
 
     default:
-        printf("%s: Bad register " REG_FMT "\n", __func__, addr);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: Bad write offset 0x%"HWADDR_PRIx"\n",
+                      __func__, addr);
     }
 }
 
@@ -1221,18 +1241,13 @@ static const TypeInfo pxa2xx_rtc_sysbus_info = {
 /* I2C Interface */
 
 #define TYPE_PXA2XX_I2C_SLAVE "pxa2xx-i2c-slave"
-#define PXA2XX_I2C_SLAVE(obj) \
-    OBJECT_CHECK(PXA2xxI2CSlaveState, (obj), TYPE_PXA2XX_I2C_SLAVE)
+OBJECT_DECLARE_SIMPLE_TYPE(PXA2xxI2CSlaveState, PXA2XX_I2C_SLAVE)
 
-typedef struct PXA2xxI2CSlaveState {
+struct PXA2xxI2CSlaveState {
     I2CSlave parent_obj;
 
     PXA2xxI2CState *host;
-} PXA2xxI2CSlaveState;
-
-#define TYPE_PXA2XX_I2C "pxa2xx_i2c"
-#define PXA2XX_I2C(obj) \
-    OBJECT_CHECK(PXA2xxI2CState, (obj), TYPE_PXA2XX_I2C)
+};
 
 struct PXA2xxI2CState {
     /*< private >*/
@@ -1354,7 +1369,9 @@ static uint64_t pxa2xx_i2c_read(void *opaque, hwaddr addr,
             s->ibmr = 0;
         return s->ibmr;
     default:
-        printf("%s: Bad register " REG_FMT "\n", __func__, addr);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: Bad read offset 0x%"HWADDR_PRIx"\n",
+                      __func__, addr);
         break;
     }
     return 0;
@@ -1427,7 +1444,9 @@ static void pxa2xx_i2c_write(void *opaque, hwaddr addr,
         break;
 
     default:
-        printf("%s: Bad register " REG_FMT "\n", __func__, addr);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: Bad write offset 0x%"HWADDR_PRIx"\n",
+                      __func__, addr);
     }
 }
 
@@ -1486,20 +1505,21 @@ PXA2xxI2CState *pxa2xx_i2c_init(hwaddr base,
     PXA2xxI2CState *s;
     I2CBus *i2cbus;
 
-    dev = qdev_create(NULL, TYPE_PXA2XX_I2C);
+    dev = qdev_new(TYPE_PXA2XX_I2C);
     qdev_prop_set_uint32(dev, "size", region_size + 1);
     qdev_prop_set_uint32(dev, "offset", base & region_size);
-    qdev_init_nofail(dev);
 
     i2c_dev = SYS_BUS_DEVICE(dev);
+    sysbus_realize_and_unref(i2c_dev, &error_fatal);
     sysbus_mmio_map(i2c_dev, 0, base & ~region_size);
     sysbus_connect_irq(i2c_dev, 0, irq);
 
     s = PXA2XX_I2C(i2c_dev);
     /* FIXME: Should the slave device really be on a separate bus?  */
     i2cbus = i2c_init_bus(dev, "dummy");
-    dev = i2c_create_slave(i2cbus, TYPE_PXA2XX_I2C_SLAVE, 0);
-    s->slave = PXA2XX_I2C_SLAVE(dev);
+    s->slave = PXA2XX_I2C_SLAVE(i2c_slave_create_simple(i2cbus,
+                                                        TYPE_PXA2XX_I2C_SLAVE,
+                                                        0));
     s->slave->host = s;
 
     return s;
@@ -1628,7 +1648,9 @@ static uint64_t pxa2xx_i2s_read(void *opaque, hwaddr addr,
         }
         return 0;
     default:
-        printf("%s: Bad register " REG_FMT "\n", __func__, addr);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: Bad read offset 0x%"HWADDR_PRIx"\n",
+                      __func__, addr);
         break;
     }
     return 0;
@@ -1685,7 +1707,9 @@ static void pxa2xx_i2s_write(void *opaque, hwaddr addr,
         }
         break;
     default:
-        printf("%s: Bad register " REG_FMT "\n", __func__, addr);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: Bad write offset 0x%"HWADDR_PRIx"\n",
+                      __func__, addr);
     }
 }
 
@@ -1757,9 +1781,6 @@ static PXA2xxI2SState *pxa2xx_i2s_init(MemoryRegion *sysmem,
 }
 
 /* PXA Fast Infra-red Communications Port */
-#define TYPE_PXA2XX_FIR "pxa2xx-fir"
-#define PXA2XX_FIR(obj) OBJECT_CHECK(PXA2xxFIrState, (obj), TYPE_PXA2XX_FIR)
-
 struct PXA2xxFIrState {
     /*< private >*/
     SysBusDevice parent_obj;
@@ -1870,7 +1891,9 @@ static uint64_t pxa2xx_fir_read(void *opaque, hwaddr addr,
     case ICFOR:
         return s->rx_len;
     default:
-        printf("%s: Bad register " REG_FMT "\n", __func__, addr);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: Bad read offset 0x%"HWADDR_PRIx"\n",
+                      __func__, addr);
         break;
     }
     return 0;
@@ -1922,7 +1945,9 @@ static void pxa2xx_fir_write(void *opaque, hwaddr addr,
     case ICFOR:
         break;
     default:
-        printf("%s: Bad register " REG_FMT "\n", __func__, addr);
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: Bad write offset 0x%"HWADDR_PRIx"\n",
+                      __func__, addr);
     }
 }
 
@@ -2041,10 +2066,10 @@ static PXA2xxFIrState *pxa2xx_fir_init(MemoryRegion *sysmem,
     DeviceState *dev;
     SysBusDevice *sbd;
 
-    dev = qdev_create(NULL, TYPE_PXA2XX_FIR);
+    dev = qdev_new(TYPE_PXA2XX_FIR);
     qdev_prop_set_chr(dev, "chardev", chr);
-    qdev_init_nofail(dev);
     sbd = SYS_BUS_DEVICE(dev);
+    sysbus_realize_and_unref(sbd, &error_fatal);
     sysbus_mmio_map(sbd, 0, base);
     sysbus_connect_irq(sbd, 0, irq);
     sysbus_connect_irq(sbd, 1, rx_dma);
@@ -2103,15 +2128,24 @@ PXA2xxState *pxa270_init(MemoryRegion *address_space,
 
     s->gpio = pxa2xx_gpio_init(0x40e00000, s->cpu, s->pic, 121);
 
-    dinfo = drive_get(IF_SD, 0, 0);
-    if (!dinfo && !qtest_enabled()) {
-        warn_report("missing SecureDigital device");
-    }
     s->mmc = pxa2xx_mmci_init(address_space, 0x41100000,
-                    dinfo ? blk_by_legacy_dinfo(dinfo) : NULL,
                     qdev_get_gpio_in(s->pic, PXA2XX_PIC_MMC),
                     qdev_get_gpio_in(s->dma, PXA2XX_RX_RQ_MMCI),
                     qdev_get_gpio_in(s->dma, PXA2XX_TX_RQ_MMCI));
+    dinfo = drive_get(IF_SD, 0, 0);
+    if (dinfo) {
+        DeviceState *carddev;
+
+        /* Create and plug in the sd card */
+        carddev = qdev_new(TYPE_SD_CARD);
+        qdev_prop_set_drive_err(carddev, "drive",
+                                blk_by_legacy_dinfo(dinfo), &error_fatal);
+        qdev_realize_and_unref(carddev, qdev_get_child_bus(DEVICE(s->mmc),
+                                                           "sd-bus"),
+                               &error_fatal);
+    } else if (!qtest_enabled()) {
+        warn_report("missing SecureDigital device");
+    }
 
     for (i = 0; pxa270_serial[i].io_base; i++) {
         if (serial_hd(i)) {
@@ -2227,15 +2261,24 @@ PXA2xxState *pxa255_init(MemoryRegion *address_space, unsigned int sdram_size)
 
     s->gpio = pxa2xx_gpio_init(0x40e00000, s->cpu, s->pic, 85);
 
-    dinfo = drive_get(IF_SD, 0, 0);
-    if (!dinfo && !qtest_enabled()) {
-        warn_report("missing SecureDigital device");
-    }
     s->mmc = pxa2xx_mmci_init(address_space, 0x41100000,
-                    dinfo ? blk_by_legacy_dinfo(dinfo) : NULL,
                     qdev_get_gpio_in(s->pic, PXA2XX_PIC_MMC),
                     qdev_get_gpio_in(s->dma, PXA2XX_RX_RQ_MMCI),
                     qdev_get_gpio_in(s->dma, PXA2XX_TX_RQ_MMCI));
+    dinfo = drive_get(IF_SD, 0, 0);
+    if (dinfo) {
+        DeviceState *carddev;
+
+        /* Create and plug in the sd card */
+        carddev = qdev_new(TYPE_SD_CARD);
+        qdev_prop_set_drive_err(carddev, "drive",
+                                blk_by_legacy_dinfo(dinfo), &error_fatal);
+        qdev_realize_and_unref(carddev, qdev_get_child_bus(DEVICE(s->mmc),
+                                                           "sd-bus"),
+                               &error_fatal);
+    } else if (!qtest_enabled()) {
+        warn_report("missing SecureDigital device");
+    }
 
     for (i = 0; pxa255_serial[i].io_base; i++) {
         if (serial_hd(i)) {

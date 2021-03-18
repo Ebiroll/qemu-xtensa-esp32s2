@@ -15,7 +15,7 @@
  */
 
 #include "qemu/osdep.h"
-#include "libqtest.h"
+#include "libqos/libqtest.h"
 
 static int verbose;
 
@@ -27,7 +27,6 @@ static const char *hmp_cmds[] = {
     "chardev-change testchardev1 ringbuf",
     "chardev-remove testchardev1",
     "commit all",
-    "cpu-add 1",
     "cpu 0",
     "device_add ?",
     "device_add usb-mouse,id=mouse1",
@@ -61,6 +60,7 @@ static const char *hmp_cmds[] = {
     "p $pc + 8",
     "qom-list /",
     "qom-set /machine initrd test",
+    "qom-get /machine initrd",
     "screendump /dev/null",
     "sendkey x",
     "singlestep on",
@@ -141,11 +141,6 @@ static void test_machine(gconstpointer data)
 static void add_machine_test_case(const char *mname)
 {
     char *path;
-
-    /* Ignore blacklisted machines that have known problems */
-    if (!memcmp("xenfv", mname, 5) || g_str_equal("xenpv", mname)) {
-        return;
-    }
 
     path = g_strdup_printf("hmp/%s", mname);
     qtest_add_data_func(path, g_strdup(mname), test_machine);

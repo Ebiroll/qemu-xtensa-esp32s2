@@ -14,6 +14,9 @@ void cpu_list_unlock(void);
 
 void tcg_flush_softmmu_tlb(CPUState *cs);
 
+void tcg_iommu_init_notifier_list(CPUState *cpu);
+void tcg_iommu_free_notifier_list(CPUState *cpu);
+
 #if !defined(CONFIG_USER_ONLY)
 
 enum device_endian {
@@ -42,9 +45,6 @@ typedef uintptr_t ram_addr_t;
 extern ram_addr_t ram_size;
 
 /* memory API */
-
-typedef void CPUWriteMemoryFunc(void *opaque, hwaddr addr, uint32_t value);
-typedef uint32_t CPUReadMemoryFunc(void *opaque, hwaddr addr);
 
 void qemu_ram_remap(ram_addr_t addr, ram_addr_t length);
 /* This should not be used by devices.  */

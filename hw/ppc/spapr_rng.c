@@ -28,9 +28,9 @@
 #include "hw/ppc/spapr.h"
 #include "hw/qdev-properties.h"
 #include "kvm_ppc.h"
+#include "qom/object.h"
 
-#define SPAPR_RNG(obj) \
-    OBJECT_CHECK(SpaprRngState, (obj), TYPE_SPAPR_RNG)
+OBJECT_DECLARE_SIMPLE_TYPE(SpaprRngState, SPAPR_RNG)
 
 struct SpaprRngState {
     /*< private >*/
@@ -38,7 +38,6 @@ struct SpaprRngState {
     RngBackend *backend;
     bool use_kvm;
 };
-typedef struct SpaprRngState SpaprRngState;
 
 struct HRandomData {
     QemuSemaphore sem;
@@ -103,8 +102,7 @@ static void spapr_rng_instance_init(Object *obj)
     }
 
     object_property_set_description(obj, "rng",
-                                    "ID of the random number generator backend",
-                                    NULL);
+                                    "ID of the random number generator backend");
 }
 
 static void spapr_rng_realize(DeviceState *dev, Error **errp)

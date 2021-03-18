@@ -17,9 +17,6 @@
 #include "qapi/error.h"
 #include "migration/blocker.h"
 
-#define VHOST_USER_GPU(obj)                                    \
-    OBJECT_CHECK(VhostUserGPU, (obj), TYPE_VHOST_USER_GPU)
-
 typedef enum VhostUserGpuRequest {
     VHOST_USER_GPU_NONE = 0,
     VHOST_USER_GPU_GET_PROTOCOL_FEATURES,
@@ -512,7 +509,7 @@ vhost_user_gpu_instance_init(Object *obj)
 
     g->vhost = VHOST_USER_BACKEND(object_new(TYPE_VHOST_USER_BACKEND));
     object_property_add_alias(obj, "chardev",
-                              OBJECT(g->vhost), "chardev", &error_abort);
+                              OBJECT(g->vhost), "chardev");
 }
 
 static void

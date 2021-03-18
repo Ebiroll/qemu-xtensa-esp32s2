@@ -19,6 +19,7 @@
 #include "hw/qdev-properties.h"
 #include "hw/ssi/ssi.h"
 #include "hw/ssi/esp32_spi.h"
+#include "hw/misc/esp32_flash_enc.h"
 
 
 
@@ -87,9 +88,6 @@ static uint64_t esp32_spi_read(void *opaque, hwaddr addr, unsigned int size)
         r = 0;
         break;
     }
-
-    //printf("spi read  %08X,%08X\n",(unsigned int)addr,(unsigned int)r);
-
     return r;
 }
 
@@ -138,8 +136,6 @@ static void esp32_spi_write(void *opaque, hwaddr addr,
         esp32_spi_do_command(s, value);
         break;
     }
-    //printf("spi write  %08X,%08X\n",(unsigned int)addr,(unsigned int)value);
-
 }
 
 typedef struct Esp32SpiTransaction {
@@ -190,6 +186,14 @@ static inline int bitlen_to_bytes(uint32_t val)
     return (val + 1 + 7) / 8; /* bitlen registers hold number of bits, minus one */
 }
 
+static void maybe_encrypt_data(Esp32SpiState *s)
+{
+    Esp32FlashEncryptionState* flash_enc = esp32_flash_encryption_find();
+    if (esp32_flash_encryption_enabled(flash_enc)) {
+        esp32_flash_encryption_get_result(flash_enc, &s->data_reg[0], 8);
+    }
+}
+
 static void esp32_spi_do_command(Esp32SpiState* s, uint32_t cmd_reg)
 {
     Esp32SpiTransaction t = {
@@ -231,6 +235,7 @@ static void esp32_spi_do_command(Esp32SpiState* s, uint32_t cmd_reg)
         break;
 
     case R_SPI_CMD_PP_MASK:
+        maybe_encrypt_data(s);
         t.cmd = CMD_PP;
         t.data = &s->data_reg[0];
         t.addr_bytes = bitlen_to_bytes(FIELD_EX32(s->user1_reg, SPI_USER1, ADDR_BITLEN));
@@ -266,6 +271,7 @@ static void esp32_spi_do_command(Esp32SpiState* s, uint32_t cmd_reg)
         break;
 
     case R_SPI_CMD_USR_MASK:
+        maybe_encrypt_data(s);
         if (FIELD_EX32(s->user_reg, SPI_USER, COMMAND) || FIELD_EX32(s->user2_reg, SPI_USER2, COMMAND_BITLEN)) {
             t.cmd = FIELD_EX32(s->user2_reg, SPI_USER2, COMMAND_VALUE);
             t.cmd_bytes = bitlen_to_bytes(FIELD_EX32(s->user2_reg, SPI_USER2, COMMAND_BITLEN));

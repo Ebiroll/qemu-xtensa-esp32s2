@@ -230,7 +230,7 @@ static void aspeed_smc_reg_to_segment(const AspeedSMCState *s, uint32_t reg,
 
 static const AspeedSegments aspeed_segments_ast2600_fmc[] = {
     { 0x0, 128 * MiB }, /* start address is readonly */
-    { 0x0, 0 }, /* disabled */
+    { 128 * MiB, 128 * MiB }, /* default is disabled but needed for -kernel */
     { 0x0, 0 }, /* disabled */
 };
 
@@ -259,7 +259,7 @@ static const AspeedSMCController controllers[] = {
         .r_timings         = R_TIMINGS,
         .nregs_timings     = 1,
         .conf_enable_w0    = CONF_ENABLE_W0,
-        .max_slaves        = 5,
+        .max_slaves        = 1,
         .segments          = aspeed_segments_legacy,
         .flash_window_base = ASPEED_SOC_SMC_FLASH_BASE,
         .flash_window_size = 0x6000000,
@@ -1299,9 +1299,7 @@ static const MemoryRegionOps aspeed_smc_ops = {
     .read = aspeed_smc_read,
     .write = aspeed_smc_write,
     .endianness = DEVICE_LITTLE_ENDIAN,
-    .valid.unaligned = true,
 };
-
 
 /*
  * Initialize the custom address spaces for DMAs
@@ -1356,7 +1354,6 @@ static void aspeed_smc_realize(DeviceState *dev, Error **errp)
 
     /* Setup cs_lines for slaves */
     s->cs_lines = g_new0(qemu_irq, s->num_cs);
-    ssi_auto_connect_slaves(dev, s->cs_lines, s->spi);
 
     for (i = 0; i < s->num_cs; ++i) {
         sysbus_init_irq(sbd, &s->cs_lines[i]);

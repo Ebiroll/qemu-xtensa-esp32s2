@@ -131,6 +131,23 @@ A region is:
 
 :mmap offset: 64-bit offset where region starts in the mapped memory
 
+Single memory region description
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
++---------+---------------+------+--------------+-------------+
+| padding | guest address | size | user address | mmap offset |
++---------+---------------+------+--------------+-------------+
+
+:padding: 64-bit
+
+:guest address: a 64-bit guest address of the region
+
+:size: a 64-bit size
+
+:user address: a 64-bit user address
+
+:mmap offset: 64-bit offset where region starts in the mapped memory
+
 Log description
 ^^^^^^^^^^^^^^^
 
@@ -464,7 +481,7 @@ the ``VHOST_USER_SET_MEM_TABLE`` request. For invalidation events, the
 (3), the I/O virtual address and the size. On success, the slave is
 expected to reply with a zero payload, non-zero otherwise.
 
-The slave relies on the slave communcation channel (see :ref:`Slave
+The slave relies on the slave communication channel (see :ref:`Slave
 communication <slave_communication>` section below) to send IOTLB miss
 and access failure events, by sending ``VHOST_USER_SLAVE_IOTLB_MSG``
 requests to the master with a ``struct vhost_iotlb_msg`` as
@@ -513,7 +530,7 @@ descriptor table (split virtqueue) or descriptor ring (packed
 virtqueue). However, it can't work when we process descriptors
 out-of-order because some entries which store the information of
 inflight descriptors in available ring (split virtqueue) or descriptor
-ring (packed virtqueue) might be overrided by new entries. To solve
+ring (packed virtqueue) might be overridden by new entries. To solve
 this problem, slave need to allocate an extra buffer to store this
 information of inflight descriptors and share it with master for
 persistent. ``VHOST_USER_GET_INFLIGHT_FD`` and
@@ -815,6 +832,8 @@ Protocol features
   #define VHOST_USER_PROTOCOL_F_INFLIGHT_SHMFD       12
   #define VHOST_USER_PROTOCOL_F_RESET_DEVICE         13
   #define VHOST_USER_PROTOCOL_F_INBAND_NOTIFICATIONS 14
+  #define VHOST_USER_PROTOCOL_F_CONFIGURE_MEM_SLOTS  15
+  #define VHOST_USER_PROTOCOL_F_STATUS               16
 
 Master message types
 --------------------
@@ -1263,6 +1282,72 @@ Master message types
 
   The state.num field is currently reserved and must be set to 0.
 
+``VHOST_USER_GET_MAX_MEM_SLOTS``
+  :id: 36
+  :equivalent ioctl: N/A
+  :slave payload: u64
+
+  When the ``VHOST_USER_PROTOCOL_F_CONFIGURE_MEM_SLOTS`` protocol
+  feature has been successfully negotiated, this message is submitted
+  by master to the slave. The slave should return the message with a
+  u64 payload containing the maximum number of memory slots for
+  QEMU to expose to the guest. The value returned by the backend
+  will be capped at the maximum number of ram slots which can be
+  supported by the target platform.
+
+``VHOST_USER_ADD_MEM_REG``
+  :id: 37
+  :equivalent ioctl: N/A
+  :slave payload: single memory region description
+
+  When the ``VHOST_USER_PROTOCOL_F_CONFIGURE_MEM_SLOTS`` protocol
+  feature has been successfully negotiated, this message is submitted
+  by the master to the slave. The message payload contains a memory
+  region descriptor struct, describing a region of guest memory which
+  the slave device must map in. When the
+  ``VHOST_USER_PROTOCOL_F_CONFIGURE_MEM_SLOTS`` protocol feature has
+  been successfully negotiated, along with the
+  ``VHOST_USER_REM_MEM_REG`` message, this message is used to set and
+  update the memory tables of the slave device.
+
+``VHOST_USER_REM_MEM_REG``
+  :id: 38
+  :equivalent ioctl: N/A
+  :slave payload: single memory region description
+
+  When the ``VHOST_USER_PROTOCOL_F_CONFIGURE_MEM_SLOTS`` protocol
+  feature has been successfully negotiated, this message is submitted
+  by the master to the slave. The message payload contains a memory
+  region descriptor struct, describing a region of guest memory which
+  the slave device must unmap. When the
+  ``VHOST_USER_PROTOCOL_F_CONFIGURE_MEM_SLOTS`` protocol feature has
+  been successfully negotiated, along with the
+  ``VHOST_USER_ADD_MEM_REG`` message, this message is used to set and
+  update the memory tables of the slave device.
+
+``VHOST_USER_SET_STATUS``
+  :id: 39
+  :equivalent ioctl: VHOST_VDPA_SET_STATUS
+  :slave payload: N/A
+  :master payload: ``u64``
+
+  When the ``VHOST_USER_PROTOCOL_F_STATUS`` protocol feature has been
+  successfully negotiated, this message is submitted by the master to
+  notify the backend with updated device status as defined in the Virtio
+  specification.
+
+``VHOST_USER_GET_STATUS``
+  :id: 40
+  :equivalent ioctl: VHOST_VDPA_GET_STATUS
+  :slave payload: ``u64``
+  :master payload: N/A
+
+  When the ``VHOST_USER_PROTOCOL_F_STATUS`` protocol feature has been
+  successfully negotiated, this message is submitted by the master to
+  query the backend for its device status as defined in the Virtio
+  specification.
+
+
 Slave message types
 -------------------
 
@@ -1382,7 +1467,7 @@ vhost-user backends can provide various devices & services and may
 need to be configured manually depending on the use case. However, it
 is a good idea to follow the conventions listed here when
 possible. Users, QEMU or libvirt, can then rely on some common
-behaviour to avoid heterogenous configuration and management of the
+behaviour to avoid heterogeneous configuration and management of the
 backend programs and facilitate interoperability.
 
 Each backend installed on a host system should come with at least one

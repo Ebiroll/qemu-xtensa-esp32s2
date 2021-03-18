@@ -38,13 +38,14 @@
 #include "qemu/module.h"
 #include "qemu/option.h"
 #include "qemu/id.h"
+#include "qemu/coroutine.h"
 
-#include "chardev/char-mux.h"
+#include "chardev-internal.h"
 
 /***********************************************************/
 /* character device */
 
-static Object *get_chardevs_root(void)
+Object *get_chardevs_root(void)
 {
     return container_get(object_get_root(), "/chardevs");
 }
@@ -119,7 +120,11 @@ static int qemu_chr_write_buffer(Chardev *s,
     retry:
         res = cc->chr_write(s, buf + *offset, len - *offset);
         if (res < 0 && errno == EAGAIN && write_all) {
-            g_usleep(100);
+            if (qemu_in_coroutine()) {
+                qemu_co_sleep_ns(QEMU_CLOCK_REALTIME, 100000);
+            } else {
+                g_usleep(100);
+            }
             goto retry;
         }
 
@@ -133,7 +138,20 @@ static int qemu_chr_write_buffer(Chardev *s,
         }
     }
     if (*offset > 0) {
+        /*
+         * If some data was written by backend, we should
+         * only log what was actually written. This method
+         * may be invoked again to write the remaining
+         * method, thus we'll log the remainder at that time.
+         */
         qemu_chr_write_log(s, buf, *offset);
+    } else if (res < 0) {
+        /*
+         * If a fatal error was reported by the backend,
+         * assume this method won't be invoked again with
+         * this buffer, so log it all right away.
+         */
+        qemu_chr_write_log(s, buf, len);
     }
     qemu_mutex_unlock(&s->chr_write_lock);
 
@@ -230,7 +248,7 @@ static void qemu_char_open(Chardev *chr, ChardevBackend *backend,
         } else {
             flags |= O_TRUNC;
         }
-        chr->logfd = qemu_open(common->logfile, flags, 0666);
+        chr->logfd = qemu_open_old(common->logfile, flags, 0666);
         if (chr->logfd < 0) {
             error_setg_errno(errp, errno,
                              "Unable to open logfile %s",
@@ -298,33 +316,6 @@ static const TypeInfo char_type_info = {
     .abstract = true,
     .class_size = sizeof(ChardevClass),
     .class_init = char_class_init,
-};
-
-static int chardev_machine_done_notify_one(Object *child, void *opaque)
-{
-    Chardev *chr = (Chardev *)child;
-    ChardevClass *class = CHARDEV_GET_CLASS(chr);
-
-    if (class->chr_machine_done) {
-        return class->chr_machine_done(chr);
-    }
-
-    return 0;
-}
-
-static void chardev_machine_done_hook(Notifier *notifier, void *unused)
-{
-    int ret = object_child_foreach(get_chardevs_root(),
-                                   chardev_machine_done_notify_one, NULL);
-
-    if (ret) {
-        error_report("Failed to call chardev machine_done hooks");
-        exit(1);
-    }
-}
-
-static Notifier chardev_machine_done_notify = {
-    .notify = chardev_machine_done_hook,
 };
 
 static bool qemu_chr_is_busy(Chardev *s)
@@ -439,8 +430,7 @@ QemuOpts *qemu_chr_parse_compat(const char *label, const char *filename,
         qemu_opt_set(opts, "host", host, &error_abort);
         qemu_opt_set(opts, "port", port, &error_abort);
         if (p[pos] == ',') {
-            qemu_opts_do_parse(opts, p+pos+1, NULL, &local_err);
-            if (local_err) {
+            if (!qemu_opts_do_parse(opts, p + pos + 1, NULL, &local_err)) {
                 error_report_err(local_err);
                 goto fail;
             }
@@ -479,8 +469,7 @@ QemuOpts *qemu_chr_parse_compat(const char *label, const char *filename,
     }
     if (strstart(filename, "unix:", &p)) {
         qemu_opt_set(opts, "backend", "socket", &error_abort);
-        qemu_opts_do_parse(opts, p, "path", &local_err);
-        if (local_err) {
+        if (!qemu_opts_do_parse(opts, p, "path", &local_err)) {
             error_report_err(local_err);
             goto fail;
         }
@@ -522,7 +511,7 @@ static const ChardevClass *char_get_class(const char *driver, Error **errp)
     const ChardevClass *cc;
     char *typename = g_strdup_printf("chardev-%s", driver);
 
-    oc = object_class_by_name(typename);
+    oc = module_object_class_by_name(typename);
     g_free(typename);
 
     if (!object_class_dynamic_cast(oc, TYPE_CHARDEV)) {
@@ -939,6 +928,15 @@ QemuOptsList qemu_chardev_opts = {
         },{
             .name = "logappend",
             .type = QEMU_OPT_BOOL,
+#ifdef CONFIG_LINUX
+        },{
+            .name = "tight",
+            .type = QEMU_OPT_BOOL,
+            .def_value_str = "on",
+        },{
+            .name = "abstract",
+            .type = QEMU_OPT_BOOL,
+#endif
         },
         { /* end of list */ }
     },
@@ -986,7 +984,8 @@ static Chardev *chardev_new(const char *id, const char *typename,
     }
 
     if (id) {
-        object_property_add_child(get_chardevs_root(), id, obj, &local_err);
+        object_property_try_add_child(get_chardevs_root(), id, obj,
+                                      &local_err);
         if (local_err) {
             goto end;
         }
@@ -1116,7 +1115,7 @@ ChardevReturn *qmp_chardev_change(const char *id, ChardevBackend *backend,
 
     object_unparent(OBJECT(chr));
     object_property_add_child(get_chardevs_root(), chr_new->label,
-                              OBJECT(chr_new), &error_abort);
+                              OBJECT(chr_new));
     object_unref(OBJECT(chr_new));
 
     ret = g_new0(ChardevReturn, 1);
@@ -1187,12 +1186,6 @@ void qemu_chr_cleanup(void)
 static void register_types(void)
 {
     type_register_static(&char_type_info);
-
-    /* this must be done after machine init, since we register FEs with muxes
-     * as part of realize functions like serial_isa_realizefn when -nographic
-     * is specified
-     */
-    qemu_add_machine_init_done_notifier(&chardev_machine_done_notify);
 }
 
 type_init(register_types);

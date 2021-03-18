@@ -103,7 +103,7 @@ static const char *cpu_model_advertised_features[] = {
     "sve128", "sve256", "sve384", "sve512",
     "sve640", "sve768", "sve896", "sve1024", "sve1152", "sve1280",
     "sve1408", "sve1536", "sve1664", "sve1792", "sve1920", "sve2048",
-    "kvm-no-adjvtime",
+    "kvm-no-adjvtime", "kvm-steal-time",
     NULL
 };
 
@@ -174,19 +174,16 @@ CpuModelExpansionInfo *qmp_query_cpu_model_expansion(CpuModelExpansionType type,
         Error *err = NULL;
 
         visitor = qobject_input_visitor_new(model->props);
-        visit_start_struct(visitor, NULL, NULL, 0, &err);
-        if (err) {
+        if (!visit_start_struct(visitor, NULL, NULL, 0, errp)) {
             visit_free(visitor);
             object_unref(obj);
-            error_propagate(errp, err);
             return NULL;
         }
 
         i = 0;
         while ((name = cpu_model_advertised_features[i++]) != NULL) {
             if (qdict_get(qdict_in, name)) {
-                object_property_set(obj, visitor, name, &err);
-                if (err) {
+                if (!object_property_set(obj, name, visitor, &err)) {
                     break;
                 }
             }
@@ -217,7 +214,7 @@ CpuModelExpansionInfo *qmp_query_cpu_model_expansion(CpuModelExpansionType type,
 
     i = 0;
     while ((name = cpu_model_advertised_features[i++]) != NULL) {
-        ObjectProperty *prop = object_property_find(obj, name, NULL);
+        ObjectProperty *prop = object_property_find(obj, name);
         if (prop) {
             QObject *value;
 

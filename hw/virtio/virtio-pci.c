@@ -19,6 +19,7 @@
 
 #include "exec/memop.h"
 #include "standard-headers/linux/virtio_pci.h"
+#include "hw/boards.h"
 #include "hw/virtio/virtio.h"
 #include "migration/qemu-file-types.h"
 #include "hw/pci/pci.h"
@@ -71,7 +72,7 @@ static void virtio_pci_notify(DeviceState *d, uint16_t vector)
         msix_notify(&proxy->pci_dev, vector);
     else {
         VirtIODevice *vdev = virtio_bus_get_device(&proxy->bus);
-        pci_set_irq(&proxy->pci_dev, atomic_read(&vdev->isr) & 1);
+        pci_set_irq(&proxy->pci_dev, qatomic_read(&vdev->isr) & 1);
     }
 }
 
@@ -397,7 +398,7 @@ static uint32_t virtio_ioport_read(VirtIOPCIProxy *proxy, uint32_t addr)
         break;
     case VIRTIO_PCI_ISR:
         /* reading from the ISR also clears it. */
-        ret = atomic_xchg(&vdev->isr, 0);
+        ret = qatomic_xchg(&vdev->isr, 0);
         pci_irq_deassert(&proxy->pci_dev);
         break;
     case VIRTIO_MSI_CONFIG_VECTOR:
@@ -1107,6 +1108,18 @@ static AddressSpace *virtio_pci_get_dma_as(DeviceState *d)
     return pci_get_address_space(dev);
 }
 
+static bool virtio_pci_queue_enabled(DeviceState *d, int n)
+{
+    VirtIOPCIProxy *proxy = VIRTIO_PCI(d);
+    VirtIODevice *vdev = virtio_bus_get_device(&proxy->bus);
+
+    if (virtio_vdev_has_feature(vdev, VIRTIO_F_VERSION_1)) {
+        return proxy->vqs[n].enabled;
+    }
+
+    return virtio_queue_enabled_legacy(vdev, n);
+}
+
 static int virtio_pci_add_mem_cap(VirtIOPCIProxy *proxy,
                                    struct virtio_pci_cap *cap)
 {
@@ -1273,16 +1286,20 @@ static void virtio_pci_common_write(void *opaque, hwaddr addr,
         virtio_queue_set_vector(vdev, vdev->queue_sel, val);
         break;
     case VIRTIO_PCI_COMMON_Q_ENABLE:
-        virtio_queue_set_num(vdev, vdev->queue_sel,
-                             proxy->vqs[vdev->queue_sel].num);
-        virtio_queue_set_rings(vdev, vdev->queue_sel,
+        if (val == 1) {
+            virtio_queue_set_num(vdev, vdev->queue_sel,
+                                 proxy->vqs[vdev->queue_sel].num);
+            virtio_queue_set_rings(vdev, vdev->queue_sel,
                        ((uint64_t)proxy->vqs[vdev->queue_sel].desc[1]) << 32 |
                        proxy->vqs[vdev->queue_sel].desc[0],
                        ((uint64_t)proxy->vqs[vdev->queue_sel].avail[1]) << 32 |
                        proxy->vqs[vdev->queue_sel].avail[0],
                        ((uint64_t)proxy->vqs[vdev->queue_sel].used[1]) << 32 |
                        proxy->vqs[vdev->queue_sel].used[0]);
-        proxy->vqs[vdev->queue_sel].enabled = 1;
+            proxy->vqs[vdev->queue_sel].enabled = 1;
+        } else {
+            virtio_error(vdev, "wrong value for queue_enable %"PRIx64, val);
+        }
         break;
     case VIRTIO_PCI_COMMON_Q_DESCLO:
         proxy->vqs[vdev->queue_sel].desc[0] = val;
@@ -1317,11 +1334,12 @@ static uint64_t virtio_pci_notify_read(void *opaque, hwaddr addr,
 static void virtio_pci_notify_write(void *opaque, hwaddr addr,
                                     uint64_t val, unsigned size)
 {
-    VirtIODevice *vdev = opaque;
-    VirtIOPCIProxy *proxy = VIRTIO_PCI(DEVICE(vdev)->parent_bus->parent);
+    VirtIOPCIProxy *proxy = opaque;
+    VirtIODevice *vdev = virtio_bus_get_device(&proxy->bus);
+
     unsigned queue = addr / virtio_pci_queue_mem_mult(proxy);
 
-    if (queue < VIRTIO_QUEUE_MAX) {
+    if (vdev != NULL && queue < VIRTIO_QUEUE_MAX) {
         virtio_queue_notify(vdev, queue);
     }
 }
@@ -1329,10 +1347,12 @@ static void virtio_pci_notify_write(void *opaque, hwaddr addr,
 static void virtio_pci_notify_write_pio(void *opaque, hwaddr addr,
                                         uint64_t val, unsigned size)
 {
-    VirtIODevice *vdev = opaque;
+    VirtIOPCIProxy *proxy = opaque;
+    VirtIODevice *vdev = virtio_bus_get_device(&proxy->bus);
+
     unsigned queue = val;
 
-    if (queue < VIRTIO_QUEUE_MAX) {
+    if (vdev != NULL && queue < VIRTIO_QUEUE_MAX) {
         virtio_queue_notify(vdev, queue);
     }
 }
@@ -1342,7 +1362,7 @@ static uint64_t virtio_pci_isr_read(void *opaque, hwaddr addr,
 {
     VirtIOPCIProxy *proxy = opaque;
     VirtIODevice *vdev = virtio_bus_get_device(&proxy->bus);
-    uint64_t val = atomic_xchg(&vdev->isr, 0);
+    uint64_t val = qatomic_xchg(&vdev->isr, 0);
     pci_irq_deassert(&proxy->pci_dev);
 
     return val;
@@ -1356,8 +1376,13 @@ static void virtio_pci_isr_write(void *opaque, hwaddr addr,
 static uint64_t virtio_pci_device_read(void *opaque, hwaddr addr,
                                        unsigned size)
 {
-    VirtIODevice *vdev = opaque;
+    VirtIOPCIProxy *proxy = opaque;
+    VirtIODevice *vdev = virtio_bus_get_device(&proxy->bus);
     uint64_t val = 0;
+
+    if (vdev == NULL) {
+        return val;
+    }
 
     switch (size) {
     case 1:
@@ -1376,7 +1401,13 @@ static uint64_t virtio_pci_device_read(void *opaque, hwaddr addr,
 static void virtio_pci_device_write(void *opaque, hwaddr addr,
                                     uint64_t val, unsigned size)
 {
-    VirtIODevice *vdev = opaque;
+    VirtIOPCIProxy *proxy = opaque;
+    VirtIODevice *vdev = virtio_bus_get_device(&proxy->bus);
+
+    if (vdev == NULL) {
+        return;
+    }
+
     switch (size) {
     case 1:
         virtio_config_modern_writeb(vdev, addr, val);
@@ -1453,19 +1484,19 @@ static void virtio_pci_modern_regions_init(VirtIOPCIProxy *proxy)
 
     memory_region_init_io(&proxy->device.mr, OBJECT(proxy),
                           &device_ops,
-                          virtio_bus_get_device(&proxy->bus),
+                          proxy,
                           "virtio-pci-device",
                           proxy->device.size);
 
     memory_region_init_io(&proxy->notify.mr, OBJECT(proxy),
                           &notify_ops,
-                          virtio_bus_get_device(&proxy->bus),
+                          proxy,
                           "virtio-pci-notify",
                           proxy->notify.size);
 
     memory_region_init_io(&proxy->notify_pio.mr, OBJECT(proxy),
                           &notify_pio_ops,
-                          virtio_bus_get_device(&proxy->bus),
+                          proxy,
                           "virtio-pci-notify-pio",
                           proxy->notify_pio.size);
 }
@@ -1565,6 +1596,20 @@ static void virtio_pci_device_plugged(DeviceState *d, Error **errp)
     }
 
     if (legacy) {
+        if (!virtio_legacy_allowed(vdev)) {
+            /*
+             * To avoid migration issues, we allow legacy mode when legacy
+             * check is disabled in the old machine types (< 5.1).
+             */
+            if (virtio_legacy_check_disabled(vdev)) {
+                warn_report("device is modern-only, but for backward "
+                            "compatibility legacy is allowed");
+            } else {
+                error_setg(errp,
+                           "device is modern-only, use disable-legacy=on");
+                return;
+            }
+        }
         if (virtio_host_has_feature(vdev, VIRTIO_F_IOMMU_PLATFORM)) {
             error_setg(errp, "VIRTIO_F_IOMMU_PLATFORM was supported by"
                        " neither legacy nor transitional device");
@@ -1705,6 +1750,7 @@ static void virtio_pci_realize(PCIDevice *pci_dev, Error **errp)
      *
      *   region 0   --  virtio legacy io bar
      *   region 1   --  msi-x bar
+     *   region 2   --  virtio modern io bar (off by default)
      *   region 4+5 --  virtio modern memory (64bit) bar
      *
      */
@@ -2023,6 +2069,37 @@ void virtio_pci_types_register(const VirtioPCIDeviceTypeInfo *t)
     g_free(base_name);
 }
 
+unsigned virtio_pci_optimal_num_queues(unsigned fixed_queues)
+{
+    /*
+     * 1:1 vq to vCPU mapping is ideal because the same vCPU that submitted
+     * virtqueue buffers can handle their completion. When a different vCPU
+     * handles completion it may need to IPI the vCPU that submitted the
+     * request and this adds overhead.
+     *
+     * Virtqueues consume guest RAM and MSI-X vectors. This is wasteful in
+     * guests with very many vCPUs and a device that is only used by a few
+     * vCPUs. Unfortunately optimizing that case requires manual pinning inside
+     * the guest, so those users might as well manually set the number of
+     * queues. There is no upper limit that can be applied automatically and
+     * doing so arbitrarily would result in a sudden performance drop once the
+     * threshold number of vCPUs is exceeded.
+     */
+    unsigned num_queues = current_machine->smp.cpus;
+
+    /*
+     * The maximum number of MSI-X vectors is PCI_MSIX_FLAGS_QSIZE + 1, but the
+     * config change interrupt and the fixed virtqueues must be taken into
+     * account too.
+     */
+    num_queues = MIN(num_queues, PCI_MSIX_FLAGS_QSIZE - fixed_queues);
+
+    /*
+     * There is a limit to how many virtqueues a device can have.
+     */
+    return MIN(num_queues, VIRTIO_QUEUE_MAX - fixed_queues);
+}
+
 /* virtio-pci-bus */
 
 static void virtio_pci_bus_new(VirtioBusState *bus, size_t bus_size,
@@ -2059,12 +2136,14 @@ static void virtio_pci_bus_class_init(ObjectClass *klass, void *data)
     k->ioeventfd_enabled = virtio_pci_ioeventfd_enabled;
     k->ioeventfd_assign = virtio_pci_ioeventfd_assign;
     k->get_dma_as = virtio_pci_get_dma_as;
+    k->queue_enabled = virtio_pci_queue_enabled;
 }
 
 static const TypeInfo virtio_pci_bus_info = {
     .name          = TYPE_VIRTIO_PCI_BUS,
     .parent        = TYPE_VIRTIO_BUS,
     .instance_size = sizeof(VirtioPCIBusState),
+    .class_size    = sizeof(VirtioPCIBusClass),
     .class_init    = virtio_pci_bus_class_init,
 };
 

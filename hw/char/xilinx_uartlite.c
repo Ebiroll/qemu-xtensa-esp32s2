@@ -23,12 +23,13 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/hw.h"
+#include "qemu/log.h"
 #include "hw/irq.h"
 #include "hw/qdev-properties.h"
 #include "hw/sysbus.h"
 #include "qemu/module.h"
 #include "chardev/char-fe.h"
+#include "qom/object.h"
 
 #define DUART(x)
 
@@ -52,10 +53,9 @@
 #define CONTROL_IE        0x10
 
 #define TYPE_XILINX_UARTLITE "xlnx.xps-uartlite"
-#define XILINX_UARTLITE(obj) \
-    OBJECT_CHECK(XilinxUARTLite, (obj), TYPE_XILINX_UARTLITE)
+OBJECT_DECLARE_SIMPLE_TYPE(XilinxUARTLite, XILINX_UARTLITE)
 
-typedef struct XilinxUARTLite {
+struct XilinxUARTLite {
     SysBusDevice parent_obj;
 
     MemoryRegion mmio;
@@ -67,7 +67,7 @@ typedef struct XilinxUARTLite {
     unsigned int rx_fifo_len;
 
     uint32_t regs[R_MAX];
-} XilinxUARTLite;
+};
 
 static void uart_update_irq(XilinxUARTLite *s)
 {
@@ -135,7 +135,8 @@ uart_write(void *opaque, hwaddr addr,
     switch (addr)
     {
         case R_STATUS:
-            hw_error("write to UART STATUS?\n");
+            qemu_log_mask(LOG_GUEST_ERROR, "%s: write to UART STATUS\n",
+                          __func__);
             break;
 
         case R_CTRL:

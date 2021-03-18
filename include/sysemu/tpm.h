@@ -16,7 +16,7 @@
 #include "qom/object.h"
 
 int tpm_config_parse(QemuOptsList *opts_list, const char *optarg);
-void tpm_init(void);
+int tpm_init(void);
 void tpm_cleanup(void);
 
 typedef enum TPMVersion {
@@ -26,22 +26,21 @@ typedef enum TPMVersion {
 } TPMVersion;
 
 #define TYPE_TPM_IF "tpm-if"
-#define TPM_IF_CLASS(klass)                                 \
-    OBJECT_CLASS_CHECK(TPMIfClass, (klass), TYPE_TPM_IF)
-#define TPM_IF_GET_CLASS(obj)                           \
-    OBJECT_GET_CLASS(TPMIfClass, (obj), TYPE_TPM_IF)
+typedef struct TPMIfClass TPMIfClass;
+DECLARE_CLASS_CHECKERS(TPMIfClass, TPM_IF,
+                       TYPE_TPM_IF)
 #define TPM_IF(obj)                             \
     INTERFACE_CHECK(TPMIf, (obj), TYPE_TPM_IF)
 
 typedef struct TPMIf TPMIf;
 
-typedef struct TPMIfClass {
+struct TPMIfClass {
     InterfaceClass parent_class;
 
     enum TpmModel model;
     void (*request_completed)(TPMIf *obj, int ret);
     enum TPMVersion (*get_version)(TPMIf *obj);
-} TPMIfClass;
+};
 
 #define TYPE_TPM_TIS_ISA            "tpm-tis"
 #define TYPE_TPM_TIS_SYSBUS         "tpm-tis-device"
@@ -50,6 +49,8 @@ typedef struct TPMIfClass {
 
 #define TPM_IS_TIS_ISA(chr)                         \
     object_dynamic_cast(OBJECT(chr), TYPE_TPM_TIS_ISA)
+#define TPM_IS_TIS_SYSBUS(chr)                      \
+    object_dynamic_cast(OBJECT(chr), TYPE_TPM_TIS_SYSBUS)
 #define TPM_IS_CRB(chr)                             \
     object_dynamic_cast(OBJECT(chr), TYPE_TPM_CRB)
 #define TPM_IS_SPAPR(chr)                           \

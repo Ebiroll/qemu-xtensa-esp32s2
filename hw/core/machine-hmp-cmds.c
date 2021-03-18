@@ -34,7 +34,7 @@ void hmp_info_cpus(Monitor *mon, const QDict *qdict)
     for (cpu = cpu_list; cpu; cpu = cpu->next) {
         int active = ' ';
 
-        if (cpu->value->cpu_index == monitor_get_cpu_index()) {
+        if (cpu->value->cpu_index == monitor_get_cpu_index(mon)) {
             active = '*';
         }
 
@@ -44,18 +44,6 @@ void hmp_info_cpus(Monitor *mon, const QDict *qdict)
     }
 
     qapi_free_CpuInfoFastList(cpu_list);
-}
-
-void hmp_cpu_add(Monitor *mon, const QDict *qdict)
-{
-    int cpuid;
-    Error *err = NULL;
-
-    error_report("cpu_add is deprecated, please use device_add instead");
-
-    cpuid = qdict_get_int(qdict, "id");
-    qmp_cpu_add(cpuid, &err);
-    hmp_handle_error(mon, err);
 }
 
 void hmp_hotpluggable_cpus(Monitor *mon, const QDict *qdict)
@@ -113,7 +101,7 @@ void hmp_info_memdev(Monitor *mon, const QDict *qdict)
 
     while (m) {
         v = string_output_visitor_new(false, &str);
-        visit_type_uint16List(v, NULL, &m->value->host_nodes, NULL);
+        visit_type_uint16List(v, NULL, &m->value->host_nodes, &error_abort);
         monitor_printf(mon, "memory backend: %s\n", m->value->id);
         monitor_printf(mon, "  size:  %" PRId64 "\n", m->value->size);
         monitor_printf(mon, "  merge: %s\n",
