@@ -14,7 +14,7 @@ jobs:
     - name: Compile qemu
       run: |
         mkdir qemu_esp32s2
-	cd $GITHUB_WORKSPACE
+	cd $GITHUB_WORKSPACE/
 	git submodule update --init meson
         cd
 	cd qemu_esp32s2
