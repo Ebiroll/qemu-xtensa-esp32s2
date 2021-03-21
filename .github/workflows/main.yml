@@ -18,7 +18,7 @@ jobs:
         cd
         mkdir qemu_esp32s2
         cd qemu_esp32s2
-        $GITHUB_WORKSPACE/configure --disable-werror --prefix=./root --enable-debug --enable-sanitizers  --disable-capstone   --disable-strip --target-list=xtensa-softmmu,riscv32-softmmu 
+        /home/runner/work/qemu-xtensa-esp32s2/qemu-xtensa-esp32s2/configure --disable-werror --prefix=./root --enable-debug --enable-sanitizers  --disable-capstone   --disable-strip --target-list=xtensa-softmmu,riscv32-softmmu 
         make -j 2
     - uses: actions/upload-artifact@master
       with:
