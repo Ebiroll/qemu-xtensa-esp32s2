@@ -61,7 +61,6 @@
 [submodule "meson"]
 	path = meson
 	url = https://git.qemu.org/git/meson.git
-	branch = 0.55
 [submodule "roms/vbootrom"]
 	path = roms/vbootrom
 	url = https://git.qemu.org/git/vbootrom.git
