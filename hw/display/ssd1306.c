@@ -1,7 +1,7 @@
 /*
  * SSD1306 OLED controller with 128x64 display.
  *
- * Copyright (c) 2017 Olof Astrand
+ * Copyright (c) 2021 Olof Astrand
  * Copyright (c) 2006-2007 CodeSourcery.
  * Written by Paul Brook
  *
@@ -14,6 +14,7 @@
 #include "qemu/osdep.h"
 #include "hw/i2c/i2c.h"
 #include "ui/console.h"
+#include "qom/object.h"
 
 #define DEBUG_SSD1306 1
 
@@ -58,11 +59,14 @@ enum ssd1306_cmd {
 };
 
 #define TYPE_SSD1306 "ssd1306"
-#define SSD1306(obj) OBJECT_CHECK(ssd1306_state, (obj), TYPE_SSD1306)
+OBJECT_DECLARE_SIMPLE_TYPE(ssd1306_state, SSD1306)
+
+//#define SSD1306(obj) OBJECT_CHECK(ssd1306_state, (obj), TYPE_SSD1306)
+
 
 #define MAX_FRAMEBUFF (132*64)
 
-typedef struct {
+ struct ssd1306_state {
     I2CSlave parent_obj;
 
     QemuConsole *con;
@@ -84,7 +88,7 @@ typedef struct {
     enum ssd1306_adressing_mode  adressing_mode;
     enum ssd1306_cmd cmd_state;
     uint8_t framebuffer[MAX_FRAMEBUFF];
-} ssd1306_state;
+} ;
 
 
 ssd1306_state *the_ssd1306=NULL;
@@ -98,7 +102,7 @@ static int ssd1306_recv(I2CSlave *i2c)
 
 static int ssd1306_send(I2CSlave *i2c, uint8_t data)
 {
-    ssd1306_state *s = the_ssd1306; //SSD1306(i2c);
+    ssd1306_state *s = SSD1306(i2c);
     enum ssd1306_cmd old_cmd_state;
 
     switch (s->mode) {
@@ -338,8 +342,8 @@ static int ssd1306_send(I2CSlave *i2c, uint8_t data)
 
 static void ssd1306_event(I2CSlave *i2c, enum i2c_event event)
 {
-    //ssd1306_state *s = SSD1306(i2c);
-    ssd1306_state *s = the_ssd1306;
+    ssd1306_state *s = SSD1306(i2c);
+    //ssd1306_state *s = the_ssd1306;
 
     DPRINTF("ssd1306_event 0x%02x\n", (int)event);
 
@@ -358,8 +362,8 @@ static void ssd1306_event(I2CSlave *i2c, enum i2c_event event)
 
 static void ssd1306_update_display(void *opaque)
 {
-    //ssd1306_state *s = (ssd1306_state *)opaque;
-    ssd1306_state *s = the_ssd1306;
+    ssd1306_state *s = (ssd1306_state *)opaque;
+    //ssd1306_state *s = the_ssd1306;
 
     DisplaySurface *surface = qemu_console_surface(s->con);
     uint8_t *dest;
@@ -465,14 +469,9 @@ static const GraphicHwOps ssd1306_ops = {
     .gfx_update  = ssd1306_update_display,
 };
 
-static int ssd1306_init(I2CSlave *i2c)
+static void ssd1306_realize(DeviceState *dev, Error **errp)
 {
-    ssd1306_state *s = SSD1306(i2c);
-
-    // Only one display although it can appear in many io-locations.
-    if (the_ssd1306==NULL) {
-        the_ssd1306=s;
-    }
+    ssd1306_state *s = SSD1306(dev);
 
     s->col=0;
     s->row=0;
@@ -485,29 +484,28 @@ static int ssd1306_init(I2CSlave *i2c)
     s->start_line=0;
     s->adressing_mode=SSD1306_PAGE;
 
-    s->con = graphic_console_init(DEVICE(i2c), 0, &ssd1306_ops, s);
-    qemu_console_resize(s->con, 128 * MAGNIFY, 64 * MAGNIFY);
     int offset=0;
     while(offset<MAX_FRAMEBUFF) {
         s->framebuffer[offset] = 0 ;
         offset++;
     }
 
-
-
-    return 0;
+    s->con = graphic_console_init(dev, 0, &ssd1306_ops, s);
+    qemu_console_resize(s->con, 128 * MAGNIFY, 64 * MAGNIFY);
 }
+
 
 static void ssd1306_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     I2CSlaveClass *k = I2C_SLAVE_CLASS(klass);
 
-    k->init = ssd1306_init;
+    dc->realize = ssd1306_realize;
     k->event = ssd1306_event;
     k->recv = ssd1306_recv;
     k->send = ssd1306_send;
     dc->vmsd = &vmstate_ssd1306;
+    set_bit(DEVICE_CATEGORY_DISPLAY, dc->categories);
 }
 
 static const TypeInfo ssd1306_info = {

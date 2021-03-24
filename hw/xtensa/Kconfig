@@ -21,4 +21,11 @@ config XTENSA_ESP32
     select OPENCORES_ETH
     select TMP105
 
-
+config XTENSA_ESP32S2
+    bool
+    select SSI
+    select SSI_M25P80
+    select UNIMP
+    select OPENCORES_ETH
+    select TMP105
+    select SSD0303 # OLED display

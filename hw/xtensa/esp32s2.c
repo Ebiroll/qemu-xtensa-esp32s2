@@ -17,6 +17,8 @@
 #include "hw/boards.h"
 #include "hw/loader.h"
 #include "hw/sysbus.h"
+#include "hw/i2c/esp32_i2c.h"
+#include "hw/i2c/i2c.h"
 #include "target/xtensa/cpu.h"
 #include "hw/misc/esp32s2_reg.h"
 #include "hw/char/esp32s2_uart.h"
@@ -36,6 +38,7 @@
 #include "hw/qdev-properties.h"
 #include "sysemu/sysemu.h"
 #include "sysemu/reset.h"
+#include "sysemu/cpus.h"
 #include "sysemu/runstate.h"
 #include "sysemu/blockdev.h"
 #include "sysemu/block-backend.h"
@@ -144,6 +147,7 @@ typedef struct Esp32S2SocState {
     /*< public >*/
     XtensaCPU cpu[ESP32S2_CPU_COUNT];
     Esp32DportState dport;
+    Esp32IntMatrixState intmatrix;
     ESP32S2UARTState uart[ESP32S2_UART_COUNT];
     Esp32s2GpioState gpio;
     Esp32RngState rng;
@@ -152,16 +156,29 @@ typedef struct Esp32S2SocState {
     Esp32TimgState timg[ESP32S2_TIMG_COUNT];
     Esp32S2SysTimerState systimer;
     Esp32SpiState spi[ESP32S2_SPI_COUNT];
+    Esp32I2CState i2c[ESP32_I2C_COUNT];
     Esp32S2ShaState sha;
     Esp32S2EfuseState efuse;
     Esp32UnimpState myunimp;
     DeviceState *eth;
+
+    BusState rtc_bus;
+    BusState periph_bus;
 
     MemoryRegion cpu_specific_mem[ESP32S2_CPU_COUNT];
 
     uint32_t requested_reset;
 } Esp32S2SocState;
 
+static void ESP32S2_remove_cpu_watchpoints(XtensaCPU* xcs)
+{
+    for (int i = 0; i < MAX_NDBREAK; ++i) {
+        if (xcs->env.cpu_watchpoint[i]) {
+            cpu_watchpoint_remove_by_ref(CPU(xcs), xcs->env.cpu_watchpoint[i]);
+            xcs->env.cpu_watchpoint[i] = NULL;
+        }
+    }
+}
 
 static void ESP32S2_dig_reset(void *opaque, int n, int level)
 {
@@ -181,19 +198,13 @@ static void ESP32S2_cpu_reset(void* opaque, int n, int level)
     }
 }
 
-static void remove_cpu_watchpoints(XtensaCPU* xcs)
-{
-    for (int i = 0; i < MAX_NDBREAK; ++i) {
-        if (xcs->env.cpu_watchpoint[i]) {
-            cpu_watchpoint_remove_by_ref(CPU(xcs), xcs->env.cpu_watchpoint[i]);
-            xcs->env.cpu_watchpoint[i] = NULL;
-        }
-    }
-}
 
 static void ESP32S2_soc_reset(DeviceState *dev)
 {
     Esp32S2SocState *s = ESP32S2_SOC(dev);
+
+    uint32_t strap_mode = s->gpio.strap_mode;
+    bool flash_boot_mode = ((strap_mode & 0x10) || (strap_mode & 0x1f) == 0x0c);
 
     if (s->requested_reset == 0) {
         s->requested_reset = ESP32S2_SOC_RESET_ALL;
@@ -203,7 +214,9 @@ static void ESP32S2_soc_reset(DeviceState *dev)
     }
     if (s->requested_reset & ESP32S2_SOC_RESET_PERIPH) {
         device_cold_reset(DEVICE(&s->dport));
+        device_cold_reset(DEVICE(&s->intmatrix));
         device_cold_reset(DEVICE(&s->sha));
+        //device_cold_reset(DEVICE(&s->rsa));
         device_cold_reset(DEVICE(&s->gpio));
         for (int i = 0; i < ESP32S2_UART_COUNT; ++i) {
             device_cold_reset(DEVICE(&s->uart));
@@ -214,10 +227,14 @@ static void ESP32S2_soc_reset(DeviceState *dev)
         for (int i = 0; i < ESP32S2_TIMG_COUNT; ++i) {
             device_cold_reset(DEVICE(&s->timg[i]));
         }
+        s->timg[0].flash_boot_mode = flash_boot_mode;
         device_cold_reset(DEVICE(&s->systimer));
 
         for (int i = 0; i < ESP32S2_SPI_COUNT; ++i) {
             device_cold_reset(DEVICE(&s->spi[i]));
+        }
+        for (int i = 0; i < ESP32_I2C_COUNT; i++) {
+            device_cold_reset(DEVICE(&s->i2c[i]));
         }
         device_cold_reset(DEVICE(&s->efuse));
         if (s->eth) {
@@ -226,7 +243,7 @@ static void ESP32S2_soc_reset(DeviceState *dev)
     }
     if (s->requested_reset & ESP32S2_SOC_RESET_PROCPU) {
         xtensa_select_static_vectors(&s->cpu[0].env, s->rtc_cntl.stat_vector_sel[0]);
-        remove_cpu_watchpoints(&s->cpu[0]);
+        ESP32S2_remove_cpu_watchpoints(&s->cpu[0]);
         cpu_reset(CPU(&s->cpu[0]));
     }
     /*
@@ -271,6 +288,8 @@ static void ESP32S2_clk_update(void* opaque, int n, int level)
         cpu_clk_freq = apb_clk_freq;
     }
     qdev_prop_set_int32(DEVICE(&s->frc_timer), "apb_freq", apb_clk_freq);
+    qdev_prop_set_int32(DEVICE(&s->timg[0]), "apb_freq", apb_clk_freq);
+    qdev_prop_set_int32(DEVICE(&s->timg[1]), "apb_freq", apb_clk_freq);
     *(uint32_t*)(&s->cpu[0].env.config->clock_freq_khz) = cpu_clk_freq / 1000;
 }
 
@@ -366,10 +385,10 @@ static void ESP32S2_soc_realize(DeviceState *dev, Error **errp)
     memory_region_add_subregion(&s->cpu_specific_mem[0], memmap[ESP32S2_MEMREGION_RTCFAST_D].base, rtcfast_d);
 
     for (int i = 0; i < ms->smp.cpus; ++i) {
-        object_property_set_bool(OBJECT(&s->cpu[i]), true, "realized", &error_abort);
+        qdev_realize(DEVICE(&s->cpu[i]), NULL, &error_fatal);
     }
 
-    object_property_set_bool(OBJECT(&s->dport), true, "realized", &error_abort);
+    qdev_realize(DEVICE(&s->dport), &s->periph_bus, &error_fatal);
 // S2_DR_REG_SYSTEM_BASE
     memory_region_add_subregion(sys_mem,0x3F4C1000 /*S2_DR_REG_SYSTEM_BASE*/,
                                 sysbus_mmio_get_region(SYS_BUS_DEVICE(&s->dport), 0));
@@ -390,11 +409,11 @@ static void ESP32S2_soc_realize(DeviceState *dev, Error **errp)
         }
     }
 
-    object_property_set_bool(OBJECT(&s->sha), true, "realized", &error_abort);
+    qdev_realize(DEVICE(&s->sha), &s->periph_bus, &error_fatal);
     ESP32S2_soc_add_periph_device(sys_mem, &s->sha, S2_DR_REG_SHA_BASE);
 
-    object_property_set_bool(OBJECT(&s->rtc_cntl), true, "realized", &error_abort);
-    ESP32S2_soc_add_periph_device(sys_mem, &s->rtc_cntl, S2_DR_REG_RTCCNTL_BASE);
+    qdev_realize(DEVICE(&s->rtc_cntl), &s->periph_bus, &error_abort);
+    ESP32S2_soc_add_periph_device(sys_mem,  &s->rtc_cntl, S2_DR_REG_RTCCNTL_BASE);
 
     qdev_connect_gpio_out_named(DEVICE(&s->rtc_cntl), ESP32_RTC_DIG_RESET_GPIO, 0,
                                 qdev_get_gpio_in_named(dev, ESP32_RTC_DIG_RESET_GPIO, 0));
@@ -407,21 +426,21 @@ static void ESP32S2_soc_realize(DeviceState *dev, Error **errp)
                                     qdev_get_gpio_in_named(dev, ESP32_RTC_CPU_STALL_GPIO, i));
     }
 
-    object_property_set_bool(OBJECT(&s->gpio), true, "realized", &error_abort);
+    qdev_realize(DEVICE(&s->gpio), &s->periph_bus, &error_fatal);
     ESP32S2_soc_add_periph_device(sys_mem, &s->gpio, S2_DR_REG_GPIO_BASE);
 
     stopme();
 
     for (int i = 0; i < ESP32S2_UART_COUNT; ++i) {
         const hwaddr uart_base[] = {S2_DR_REG_UART_BASE, S2_DR_REG_UART1_BASE};
-        object_property_set_bool(OBJECT(&s->uart[i]), true, "realized", &error_abort);
+        qdev_realize(DEVICE(&s->uart[i]), &s->periph_bus, &error_fatal);
         ESP32S2_soc_add_periph_device(sys_mem, &s->uart[i], uart_base[i]);
         sysbus_connect_irq(SYS_BUS_DEVICE(&s->uart[i]), 0,
                            qdev_get_gpio_in(intmatrix_dev, ETS_UART0_INTR_SOURCE + i));
     }
 
     for (int i = 0; i < ESP32S2_FRC_COUNT; ++i) {
-        object_property_set_bool(OBJECT(&s->frc_timer[i]), true, "realized", &error_abort);
+        qdev_realize(DEVICE(&s->frc_timer[i]), &s->periph_bus, &error_fatal);
 
         ESP32S2_soc_add_periph_device(sys_mem, &s->frc_timer[i], S2_DR_REG_FRC_TIMER_BASE + i * ESP32_FRC_TIMER_STRIDE);
 
@@ -430,12 +449,26 @@ static void ESP32S2_soc_realize(DeviceState *dev, Error **errp)
     }
 
     for (int i = 0; i < ESP32S2_TIMG_COUNT; ++i) {
-        const hwaddr timg_base[] = {S2_DR_REG_TIMERGROUP0_BASE, S2_DR_REG_TIMERGROUP1_BASE,};
-        object_property_set_bool(OBJECT(&s->timg[i]), true, "realized", &error_abort);
+        const hwaddr timg_base[] = {S2_DR_REG_TIMERGROUP0_BASE, S2_DR_REG_TIMERGROUP1_BASE};
+        qdev_realize(DEVICE(&s->timg[i]), &s->periph_bus, &error_fatal);
 
         ESP32S2_soc_add_periph_device(sys_mem, &s->timg[i], timg_base[i]);
+
+        int timg_level_int[] = { ETS_TG0_T0_LEVEL_INTR_SOURCE, ETS_TG1_T0_LEVEL_INTR_SOURCE };
+        int timg_edge_int[] = { ETS_TG0_T0_EDGE_INTR_SOURCE, ETS_TG1_T0_EDGE_INTR_SOURCE };
+        for (Esp32TimgInterruptType it = TIMG_T0_INT; it < TIMG_INT_MAX; ++it) {
+            sysbus_connect_irq(SYS_BUS_DEVICE(&s->timg[i]), it, qdev_get_gpio_in(intmatrix_dev, timg_level_int[i] + it));
+            sysbus_connect_irq(SYS_BUS_DEVICE(&s->timg[i]), TIMG_INT_MAX + it, qdev_get_gpio_in(intmatrix_dev, timg_edge_int[i] + it));
+        }
+
+        //qdev_connect_gpio_out_named(DEVICE(&s->timg[i]), ESP32_TIMG_WDT_CPU_RESET_GPIO, 0,
+        //                            qdev_get_gpio_in_named(dev, ESP32_TIMG_WDT_CPU_RESET_GPIO, i));
+        //qdev_connect_gpio_out_named(DEVICE(&s->timg[i]), ESP32_TIMG_WDT_SYS_RESET_GPIO, 0,
+        //                            qdev_get_gpio_in_named(dev, ESP32_TIMG_WDT_SYS_RESET_GPIO, i));
+
+
     }
-    object_property_set_bool(OBJECT(&s->systimer), true, "realized", &error_abort);
+    qdev_realize(DEVICE(&s->systimer), &s->periph_bus, &error_abort);
     ESP32S2_soc_add_periph_device(sys_mem, &s->systimer, S2_DR_REG_SYSTIMER_BASE);
 
 
@@ -443,7 +476,7 @@ static void ESP32S2_soc_realize(DeviceState *dev, Error **errp)
         const hwaddr spi_base[] = {
             S2_DR_REG_SPI0_BASE, S2_DR_REG_SPI1_BASE, S2_DR_REG_SPI2_BASE, S2_DR_REG_SPI3_BASE
         };
-        object_property_set_bool(OBJECT(&s->spi[i]), true, "realized", &error_abort);
+         qdev_realize(DEVICE(&s->spi[i]), &s->periph_bus, &error_fatal);
 
         ESP32S2_soc_add_periph_device(sys_mem, &s->spi[i], spi_base[i]);
 
@@ -451,11 +484,25 @@ static void ESP32S2_soc_realize(DeviceState *dev, Error **errp)
                            qdev_get_gpio_in(intmatrix_dev, ETS_SPI0_INTR_SOURCE + i));
     }
 
+    for (int i = 0; i < ESP32_I2C_COUNT; i++) {
+        const hwaddr i2c_base[] = {
+            DR_REG_I2C_EXT_BASE, DR_REG_I2C1_EXT_BASE
+        };
+        qdev_realize(DEVICE(&s->i2c[i]), &s->periph_bus, &error_fatal);
+
+        ESP32S2_soc_add_periph_device(sys_mem, &s->i2c[i], i2c_base[i]);
+
+        sysbus_connect_irq(SYS_BUS_DEVICE(&s->i2c[i]), 0,
+                           qdev_get_gpio_in(intmatrix_dev, ETS_I2C_EXT0_INTR_SOURCE + i));
+    }
+
+
+
 //OLAS random
-    object_property_set_bool(OBJECT(&s->rng), true, "realized", &error_abort);
+    qdev_realize(DEVICE(&s->rng), &s->periph_bus, &error_abort);
     ESP32S2_soc_add_periph_device(sys_mem, &s->rng, 0x60035110);
 
-    object_property_set_bool(OBJECT(&s->efuse), true, "realized", &error_abort);
+    qdev_realize(DEVICE(&s->efuse),  &s->periph_bus, &error_abort);
     ESP32S2_soc_add_periph_device(sys_mem, &s->efuse, S2_DR_REG_EFUSE_BASE);
     sysbus_connect_irq(SYS_BUS_DEVICE(&s->efuse), 0,
                        qdev_get_gpio_in(intmatrix_dev, ETS_EFUSE_INTR_SOURCE));
@@ -484,7 +531,7 @@ static void ESP32S2_soc_realize(DeviceState *dev, Error **errp)
 
     //ESP32S2_soc_add_unimp_device(sys_mem, "esp32s2.unknown", 0x61801000, 0x1000);
 
-    object_property_set_bool(OBJECT(&s->myunimp), true, "realized", &error_abort);
+    qdev_realize(DEVICE(&s->myunimp), &s->periph_bus , &error_abort);
     ESP32S2_soc_add_periph_device(sys_mem, &s->myunimp, 0x61800000);
 
 /*
@@ -512,7 +559,7 @@ static void esp32s2_soc_init(Object *obj)
 
     for (int i = 0; i < ms->smp.cpus; ++i) {
         snprintf(name, sizeof(name), "cpu%d", i);
-        object_initialize_child(obj, name, &s->cpu[i], sizeof(s->cpu[i]), TYPE_ESP32S2_CPU, &error_abort, NULL);
+        object_initialize_child(obj, name, &s->cpu[i], TYPE_ESP32S2_CPU);
 
         const uint32_t cpuid[ESP32S2_CPU_COUNT] = { 0xcdcd /*, 0xabab */};
         s->cpu[i].env.sregs[PRID] = cpuid[i];
@@ -533,57 +580,59 @@ static void esp32s2_soc_init(Object *obj)
 
     for (int i = 0; i < ESP32S2_UART_COUNT; ++i) {
         snprintf(name, sizeof(name), "uart%d", i);
-        object_initialize_child(obj, name, &s->uart[i], sizeof(s->uart[i]),
-                                TYPE_ESP32S2_UART, &error_abort, NULL);
+        object_initialize_child(obj, name, &s->uart[i], TYPE_ESP32S2_UART);
     }
 
-    object_property_add_alias(obj, "serial0", OBJECT(&s->uart[0]), "chardev",
-                              &error_abort);
+    object_property_add_alias(obj, "serial0", OBJECT(&s->uart[0]), "chardev");
+    //object_property_add_alias(obj, "serial1", OBJECT(&s->uart[1]), "chardev");
+    //object_property_add_alias(obj, "serial2", OBJECT(&s->uart[2]), "chardev");
 
-    object_initialize_child(obj, "gpio", &s->gpio, sizeof(s->gpio),
-                                TYPE_ESP32S2_GPIO, &error_abort, NULL);
+    object_initialize_child(obj, "gpio", &s->gpio, TYPE_ESP32S2_GPIO);
 
-    object_initialize_child(obj, "dport", &s->dport, sizeof(s->dport),
-                            TYPE_ESP32S2_DPORT, &error_abort, NULL);
+    object_initialize_child(obj, "dport", &s->dport, TYPE_ESP32S2_DPORT);
 
-    object_initialize_child(obj, "rtc_cntl", &s->rtc_cntl, sizeof(s->rtc_cntl),
-                            TYPE_ESP32_RTC_CNTL, &error_abort, NULL);
+    object_initialize_child(obj, "intmatrix", &s->intmatrix, TYPE_ESP32S2_INTMATRIX);
 
+    object_initialize_child(obj, "rtc_cntl", &s->rtc_cntl, TYPE_ESP32_RTC_CNTL);
 
-    object_initialize_child(obj, "myunimp", &s->myunimp, sizeof(s->myunimp),
-                                TYPE_ESP32S2_MYUNIMP, &error_abort, NULL);
-
-
+    object_initialize_child(obj, "myunimp", &s->rtc_cntl, TYPE_ESP32S2_MYUNIMP);
 
     for (int i = 0; i < ESP32_FRC_COUNT; ++i) {
         snprintf(name, sizeof(name), "frc%d", i);
-        object_initialize_child(obj, name, &s->frc_timer[i], sizeof(s->frc_timer[i]),
-                                TYPE_ESP32_FRC_TIMER, &error_abort, NULL);
+        object_initialize_child(obj, name, &s->frc_timer[i], TYPE_ESP32_FRC_TIMER);
     }
 
     for (int i = 0; i < ESP32_TIMG_COUNT; ++i) {
         snprintf(name, sizeof(name), "timg%d", i);
-        object_initialize_child(obj, name, &s->timg[i], sizeof(s->timg[i]),
-                                TYPE_ESP32_TIMG, &error_abort, NULL);
+        object_initialize_child(obj, name, &s->timg[i], TYPE_ESP32_TIMG);
     }
-    object_initialize_child(obj, "systimer", &s->systimer, sizeof(s->systimer),
-                            TYPE_ESP32S2_SYSTIMER, &error_abort, NULL);
 
 
-    for (int i = 0; i < ESP32S2_SPI_COUNT; ++i) {
+    object_initialize_child(obj, "systimer", &s->systimer, TYPE_ESP32S2_MYUNIMP);
+
+
+    for (int i = 0; i < ESP32_SPI_COUNT; ++i) {
         snprintf(name, sizeof(name), "spi%d", i);
-        object_initialize_child(obj, name, &s->spi[i], sizeof(s->spi[i]),
-                                TYPE_ESP32S2_SPI, &error_abort, NULL);
+        object_initialize_child(obj, name, &s->spi[i], TYPE_ESP32S2_SPI);
     }
 
-    object_initialize_child(obj, "rng", &s->rng, sizeof(s->rng),
-                            TYPE_ESP32_RNG, &error_abort, NULL);
+    for (int i = 0; i < ESP32_I2C_COUNT; ++i) {
+        snprintf(name, sizeof(name), "i2c%d", i);
+        object_initialize_child(obj, name, &s->i2c[i], TYPE_ESP32_I2C);
+    }
 
-    object_initialize_child(obj, "sha", &s->sha, sizeof(s->sha),
-                                TYPE_ESP32S2_SHA, &error_abort, NULL);
+    object_initialize_child(obj, "rng", &s->rng, TYPE_ESP32_RNG);
 
-    object_initialize_child(obj, "efuse", &s->efuse, sizeof(s->efuse),
-                                    TYPE_ESP32S2_EFUSE, &error_abort, NULL);
+    object_initialize_child(obj, "sha", &s->sha, TYPE_ESP32S2_SHA);
+
+    // object_initialize_child(obj, "rsa", &s->rsa, TYPE_ESP32_RSA);
+
+    object_initialize_child(obj, "efuse", &s->efuse, TYPE_ESP32S2_EFUSE);
+
+    // object_initialize_child(obj, "flash_enc", &s->flash_enc, TYPE_ESP32_FLASH_ENCRYPTION);
+
+
+    // qdev_init_gpio_in_named(DEVICE(s), esp32_timg_sys_reset, ESP32_TIMG_WDT_SYS_RESET_GPIO, 2);
 
 
     qdev_init_gpio_in_named(DEVICE(s), ESP32S2_dig_reset, ESP32_RTC_DIG_RESET_GPIO, 1);
@@ -648,7 +697,7 @@ static void ESP32S2_soc_class_init(ObjectClass *klass, void *data)
 
 static const TypeInfo ESP32S2_soc_info = {
     .name = TYPE_ESP32S2_SOC,
-    .parent = TYPE_SYS_BUS_DEVICE,
+    .parent = TYPE_DEVICE,
     .instance_size = sizeof(Esp32S2SocState),
     .instance_init = esp32s2_soc_init,
     .class_init = ESP32S2_soc_class_init
@@ -669,17 +718,31 @@ static uint64_t translate_phys_addr(void *opaque, uint64_t addr)
     return cpu_get_phys_page_debug(CPU(cpu), addr);
 }
 
+
+struct Esp32S2MachineState {
+    MachineState parent;
+
+    Esp32S2SocState esp32S2;
+    DeviceState *flash_dev;
+};
+
+#define TYPE_ESP32S2_MACHINE MACHINE_TYPE_NAME("esp32S2")
+OBJECT_DECLARE_SIMPLE_TYPE(Esp32S2MachineState, ESP32S2_MACHINE)
+
+
+
 static void ESP32S2_machine_init_spi_flash(MachineState *machine, Esp32S2SocState *s, BlockBackend* blk)
 {
-    /* "main" flash chip is attached to SPI1 */
+   /* "main" flash chip is attached to SPI1 */
     DeviceState *spi_master = DEVICE(&s->spi[1]);
-    SSIBus* spi_bus = (SSIBus *)qdev_get_child_bus(spi_master, "spi");
-    DeviceState *flash_dev = ssi_create_slave_no_init(spi_bus, "gd25q32");
-    qdev_prop_set_drive(flash_dev, "drive", blk, &error_fatal);
-    qdev_init_nofail(flash_dev);
+    BusState* spi_bus = qdev_get_child_bus(spi_master, "spi");
+    DeviceState *flash_dev = qdev_new("gd25q32");
+    qdev_prop_set_drive(flash_dev, "drive", blk);
+    qdev_realize_and_unref(flash_dev, spi_bus, &error_fatal);
     qdev_connect_gpio_out_named(spi_master, SSI_GPIO_CS, 0,
                                 qdev_get_gpio_in_named(flash_dev, SSI_GPIO_CS, 0));
 }
+
 
 static void ESP32S2_machine_init_openeth(Esp32S2SocState *ss)
 {
@@ -688,16 +751,15 @@ static void ESP32S2_machine_init_openeth(Esp32S2SocState *ss)
     MemoryRegion* sys_mem = get_system_memory();
     hwaddr reg_base = ADDR_FIFO_USB_0;
     hwaddr desc_base = reg_base + 0x400;
-    qemu_irq irq = qdev_get_gpio_in(DEVICE(&ss->dport.intmatrix), ETS_ETH_MAC_INTR_SOURCE);
+    qemu_irq irq = qdev_get_gpio_in(DEVICE(&ss->intmatrix), ETS_ETH_MAC_INTR_SOURCE);
 
     const char* type_openeth = "open_eth";
     if (nd->used && nd->model && strcmp(nd->model, type_openeth) == 0) {
-        DeviceState* open_eth_dev = qdev_create(NULL, type_openeth);
+        DeviceState* open_eth_dev = qdev_new(type_openeth);
         ss->eth = open_eth_dev;
         qdev_set_nic_properties(open_eth_dev, nd);
-        qdev_init_nofail(open_eth_dev);
-
         sbd = SYS_BUS_DEVICE(open_eth_dev);
+        sysbus_realize_and_unref(sbd, &error_fatal);
         sysbus_connect_irq(sbd, 0, irq);
         memory_region_add_subregion(sys_mem, reg_base, sysbus_mmio_get_region(sbd, 0));
         memory_region_add_subregion(sys_mem, desc_base, sysbus_mmio_get_region(sbd, 1));
@@ -1173,7 +1235,25 @@ type_init(ESP32S2_gpio_register_types)
 
 /*************/
 
-static void ESP32S2_machine_inst_init(MachineState *machine)
+
+static void ESP32S2_machine_init_i2c(Esp32S2SocState *s)
+{
+    /* It should be possible to create an I2C device from the command line,
+     * however for this to work the I2C bus must be reachable from sysbus-default.
+     * At the moment the peripherals are added to an unrelated bus, to avoid being
+     * reset on CPU reset.
+     * If we find a way to decouple peripheral reset from sysbus reset,
+     * we can move them to the sysbus and thus enable creation of i2c devices.
+     */
+    DeviceState *i2c_master = DEVICE(&s->i2c[0]);
+    I2CBus* i2c_bus = I2C_BUS(qdev_get_child_bus(i2c_master, "i2c"));
+    I2CSlave* tmp105 = i2c_slave_create_simple(i2c_bus, "tmp105", 0x48);
+    object_property_set_int(OBJECT(tmp105), "temperature", 25 * 1000, &error_fatal);
+}
+
+
+
+static void ESP32S2_machine_init(MachineState *machine)
 {
     Esp32S2SocState *s = g_new0(Esp32S2SocState, 1);
 
@@ -1188,8 +1268,9 @@ static void ESP32S2_machine_inst_init(MachineState *machine)
 
     qemu_log("Init SOC\n");
 
-    object_initialize_child(OBJECT(machine), "soc", s, sizeof(*s),
-                            TYPE_ESP32S2_SOC, &error_abort, NULL);
+    Esp32S2MachineState *ms = ESP32S2_MACHINE(machine);
+    object_initialize_child(OBJECT(ms), "soc", &ms->esp32S2, TYPE_ESP32S2_SOC);
+    Esp32S2SocState *ss = ESP32S2_SOC(&ms->esp32S2);
 
     qemu_log("Done\n");
 
@@ -1202,11 +1283,12 @@ static void ESP32S2_machine_inst_init(MachineState *machine)
     }
     qdev_prop_set_chr(DEVICE(s), "serial0", serial_hd(0));
 
-    object_property_set_bool(OBJECT(s), true, "realized", &error_abort);
+    qdev_realize(DEVICE(ss),NULL, &error_fatal);
 
     if (blk) {
         ESP32S2_machine_init_spi_flash(machine, s, blk);
     }
+    ESP32S2_machine_init_i2c(s);
 
     ESP32S2_machine_init_openeth(s);
 
@@ -1260,13 +1342,13 @@ static void ESP32S2_machine_inst_init(MachineState *machine)
         }
     } else {
         /*
-        char *rom_binary = qemu_find_file(QEMU_FILE_TYPE_BIOS, "esp32-r0-rom.bin");
+        char *rom_binary = qemu_find_file(QEMU_FILE_TYPE_BIOS, "esp32-v3-rom.bin");
         if (rom_binary == NULL) {
             error_report("Error: -bios argument not set, and ROM code binary not found");
             exit(1);
         }
 
-        int size = load_image_targphys(rom_binary, ESP32S2_memmap[ESP32S2_MEMREGION_IROM].base, ESP32S2_memmap[ESP32S2_MEMREGION_IROM].size);
+        int size = load_image_targphys(rom_binary, esp32_memmap[ESP32_MEMREGION_IROM].base, esp32_memmap[ESP32_MEMREGION_IROM].size);
         if (size < 0) {
             error_report("Error: could not load ROM binary '%s'", rom_binary);
             exit(1);
@@ -1278,13 +1360,36 @@ static void ESP32S2_machine_inst_init(MachineState *machine)
 }
 
 /* Initialize machine type */
-static void ESP32S2_machine_init(MachineClass *mc)
+//static void ESP32S2_machine_init(MachineClass *mc)
+//{
+//    mc->desc = "Espressif ESP32S2 machine";
+//    mc->init = ESP32S2_machine_inst_init;
+//    mc->max_cpus = 1;
+//    mc->default_cpus = 1;
+//}
+//DEFINE_MACHINE("esp32s2", ESP32S2_machine_init)
+
+
+/* Initialize machine type */
+static void esp32s2_machine_class_init(ObjectClass *oc, void *data)
 {
+    MachineClass *mc = MACHINE_CLASS(oc);
     mc->desc = "Espressif ESP32S2 machine";
-    mc->init = ESP32S2_machine_inst_init;
-    mc->max_cpus = 1;
-    mc->default_cpus = 1;
+    mc->init = ESP32S2_machine_init;
+    mc->max_cpus = 2;
+    mc->default_cpus = 2;
 }
 
-DEFINE_MACHINE("esp32s2", ESP32S2_machine_init)
+static const TypeInfo esp32s2_info = {
+    .name = TYPE_ESP32S2_MACHINE,
+    .parent = TYPE_MACHINE,
+    .instance_size = sizeof(Esp32S2MachineState),
+    .class_init = esp32s2_machine_class_init,
+};
 
+static void esp32s2_machine_type_init(void)
+{
+    type_register_static(&esp32s2_info);
+}
+
+type_init(esp32s2_machine_type_init);

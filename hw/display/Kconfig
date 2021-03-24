@@ -37,6 +37,10 @@ config SSD0303
     bool
     depends on I2C
 
+config SSD1306
+    bool
+    depends on I2C
+
 config SSD0323
     bool
 

@@ -16,15 +16,15 @@
 #include "hw/sysbus.h"
 #include "hw/irq.h"
 #include "hw/qdev-properties.h"
-#include "hw/xtensa/esp32_intc.h"
+#include "hw/xtensa/esp32S2_intc.h"
 
 #define INTMATRIX_UNINT_VALUE   6
 
 #define IRQ_MAP(cpu, input) s->irq_map[cpu][input]
 
-static void esp32_intmatrix_irq_handler(void *opaque, int n, int level)
+static void esp32S2_intmatrix_irq_handler(void *opaque, int n, int level)
 {
-    Esp32IntMatrixState *s = ESP32_INTMATRIX(opaque);
+    Esp32S2IntMatrixState *s = ESP32_INTMATRIX(opaque);
     for (int i = 0; i < ESP32_CPU_COUNT; ++i) {
         if (s->outputs[i] == NULL) {
             continue;
@@ -51,14 +51,14 @@ static inline uint8_t* get_map_entry(Esp32IntMatrixState* s, hwaddr addr)
     return &IRQ_MAP(cpu_index, source_index);
 }
 
-static uint64_t esp32_intmatrix_read(void* opaque, hwaddr addr, unsigned int size)
+static uint64_t esp32S2_intmatrix_read(void* opaque, hwaddr addr, unsigned int size)
 {
     Esp32IntMatrixState *s = ESP32_INTMATRIX(opaque);
     uint8_t* map_entry = get_map_entry(s, addr);
     return (map_entry != NULL) ? *map_entry : 0;
 }
 
-static void esp32_intmatrix_write(void* opaque, hwaddr addr, uint64_t value, unsigned int size)
+static void esp32S2_intmatrix_write(void* opaque, hwaddr addr, uint64_t value, unsigned int size)
 {
     Esp32IntMatrixState *s = ESP32_INTMATRIX(opaque);
     uint8_t* map_entry = get_map_entry(s, addr);
@@ -68,12 +68,12 @@ static void esp32_intmatrix_write(void* opaque, hwaddr addr, uint64_t value, uns
 }
 
 static const MemoryRegionOps esp_intmatrix_ops = {
-    .read =  esp32_intmatrix_read,
-    .write = esp32_intmatrix_write,
+    .read =  esp32S2_intmatrix_read,
+    .write = esp32S2_intmatrix_write,
     .endianness = DEVICE_LITTLE_ENDIAN,
 };
 
-static void esp32_intmatrix_reset(DeviceState *dev)
+static void esp32S2_intmatrix_reset(DeviceState *dev)
 {
     Esp32IntMatrixState *s = ESP32_INTMATRIX(dev);
     memset(s->irq_map, INTMATRIX_UNINT_VALUE, sizeof(s->irq_map));
@@ -88,7 +88,7 @@ static void esp32_intmatrix_reset(DeviceState *dev)
 
 }
 
-static void esp32_intmatrix_realize(DeviceState *dev, Error **errp)
+static void esp32S2_intmatrix_realize(DeviceState *dev, Error **errp)
 {
     Esp32IntMatrixState *s = ESP32_INTMATRIX(dev);
 
@@ -100,7 +100,7 @@ static void esp32_intmatrix_realize(DeviceState *dev, Error **errp)
     esp32_intmatrix_reset(dev);
 }
 
-static void esp32_intmatrix_init(Object *obj)
+static void esp32S2_intmatrix_init(Object *obj)
 {
     Esp32IntMatrixState *s = ESP32_INTMATRIX(obj);
     SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
@@ -112,13 +112,12 @@ static void esp32_intmatrix_init(Object *obj)
     qdev_init_gpio_in(DEVICE(s), esp32_intmatrix_irq_handler, ESP32_INT_MATRIX_INPUTS);
 }
 
-static Property esp32_intmatrix_properties[] = {
-    DEFINE_PROP_LINK("cpu0", Esp32IntMatrixState, cpu[0], TYPE_XTENSA_CPU, XtensaCPU *),
-    DEFINE_PROP_LINK("cpu1", Esp32IntMatrixState, cpu[1], TYPE_XTENSA_CPU, XtensaCPU *),
+static Property esp32S2_intmatrix_properties[] = {
+    DEFINE_PROP_LINK("cpu0", Esp32S2IntMatrixState, cpu[0], TYPE_XTENSA_CPU, XtensaCPU *),
     DEFINE_PROP_END_OF_LIST(),
 };
 
-static void esp32_intmatrix_class_init(ObjectClass *klass, void *data)
+static void esp32S2_intmatrix_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
@@ -127,17 +126,17 @@ static void esp32_intmatrix_class_init(ObjectClass *klass, void *data)
     device_class_set_props(dc, esp32_intmatrix_properties);
 }
 
-static const TypeInfo esp32_intmatrix_info = {
-    .name = TYPE_ESP32_INTMATRIX,
+static const TypeInfo esp32S2_intmatrix_info = {
+    .name = TYPE_ESP32S2_INTMATRIX,
     .parent = TYPE_SYS_BUS_DEVICE,
-    .instance_size = sizeof(Esp32IntMatrixState),
-    .instance_init = esp32_intmatrix_init,
-    .class_init = esp32_intmatrix_class_init
+    .instance_size = sizeof(Esp32S2IntMatrixState),
+    .instance_init = esp32S2_intmatrix_init,
+    .class_init = esp32S2_intmatrix_class_init
 };
 
-static void esp32_intmatrix_register_types(void)
+static void esp32S2_intmatrix_register_types(void)
 {
-    type_register_static(&esp32_intmatrix_info);
+    type_register_static(&esp32S2_intmatrix_info);
 }
 
-type_init(esp32_intmatrix_register_types)
+type_init(esp32S2_intmatrix_register_types)
