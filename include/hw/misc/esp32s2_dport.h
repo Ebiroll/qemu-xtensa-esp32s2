@@ -5,7 +5,6 @@
 #include "hw/sysbus.h"
 #include "hw/misc/esp32s2_reg.h"
 #include "sysemu/block-backend.h"
-#include "target/xtensa/cpu.h"
 #include "target/xtensa/cpu-qom.h"
 
 typedef struct Esp32DportState Esp32DportState;
@@ -91,7 +90,7 @@ typedef struct Esp32DportState {
     bool appcpu_clkgate_state;
     uint32_t appcpu_boot_addr;
     uint32_t cpuperiod_sel;
-} Esp32DportState;
+} Esp32S2DportState;
 
 #define ESP32S2_DPORT_APPCPU_STALL_GPIO   "appcpu-stall"
 #define ESP32S2_DPORT_APPCPU_RESET_GPIO   "appcpu-reset"

@@ -19,7 +19,8 @@
 #include "hw/boards.h"
 #include "hw/misc/esp32s2_reg.h"
 #include "hw/misc/esp32s2_dport.h"
-#include "target/xtensa/cpu.h"
+#include "hw/misc/esp32_flash_enc.h"
+#include "hw/nvram/esp32s2_efuse.h"
 
 //#define TYPE_ESP32S2_DPORT "misc.esp32.dport"
 
@@ -362,11 +363,13 @@ static void esp32s2_cache_reset(Esp32CacheState *cs)
     esp32s2_cache_region_reset(&cs->drom0);
     esp32s2_cache_region_reset(&cs->iram0);
 }
+
+#if 0
 static const MemoryRegionOps ESP32S2_cache_ops = {
     .write = NULL,
     .endianness = DEVICE_LITTLE_ENDIAN,
 };
-
+#endif
 
 static void esp32s2_dport_reset(DeviceState *dev)
 {
@@ -387,13 +390,6 @@ static void esp32s2_dport_realize(DeviceState *dev, Error **errp)
 
     s->cpu_count = ms->smp.cpus;
 
-    for (int i = 0; i < s->cpu_count; ++i) {
-        char name[16];
-        snprintf(name, sizeof(name), "cpu%d", i);
-        printf("Name[%s]",name);
-        object_property_set_link(OBJECT(&s->intmatrix), OBJECT(qemu_get_cpu(i)), name, &error_abort);
-    }
-    object_property_set_bool(OBJECT(&s->intmatrix), true, "realized", &error_abort);
 
     //object_property_set_bool(OBJECT(&s->crosscore_int), true, "realized", &error_abort);
 
@@ -404,6 +400,7 @@ static void esp32s2_dport_realize(DeviceState *dev, Error **errp)
     //}
 }
 
+#if 0
 static void ESP32S2_cache_init_region(Esp32CacheState *cs,
                                     Esp32CacheRegionState *crs,
                                     Esp32CacheRegionType type,
@@ -419,6 +416,7 @@ static void ESP32S2_cache_init_region(Esp32CacheState *cs,
                                   &ESP32S2_cache_ops, crs,
                                   desc, ESP32S2_CACHE_REGION_SIZE, &error_abort);
 }
+#endif
 
 static void esp32s2_dport_init(Object *obj)
 {
@@ -435,27 +433,18 @@ perif
 
 0x618000000x6180_3FFF
 */
-
-
-
-
-    object_initialize_child(obj, "intmatrix", &s->intmatrix, sizeof(s->intmatrix), TYPE_ESP32S2_INTMATRIX, &error_abort, NULL);
-    memory_region_add_subregion_overlap(&s->iomem, S2_DR_REG_INTERRUPT_BASE, &s->intmatrix.iomem, -1);
-
-    //object_initialize_child(obj, "crosscore_int", &s->crosscore_int, sizeof(s->crosscore_int), TYPE_ESP32S2_CROSSCORE_INT,
-    //                        &error_abort, NULL);
-    //memory_region_add_subregion_overlap(&s->iomem, ESP32S2_DPORT_CROSSCORE_INT_BASE, &s->crosscore_int.iomem, -1);
-
-
+#if 0
     for (int i = 0; i < ESP32S2_CPU_COUNT; ++i) {
         Esp32CacheState* cs = &s->cache_state[i];
         cs->core_id = i;
         cs->dport = s;
-        ESP32S2_cache_init_region(cs, &cs->drom0, ESP32S2_DCACHE,
-                                R_DPORT_PRO_CACHE_CTRL1_MASK_DROM0_MASK, "drom0", 0x3F400000);
-        ESP32S2_cache_init_region(cs, &cs->iram0, ESP32S2_ICACHE,
-                                R_DPORT_PRO_CACHE_CTRL1_MASK_IRAM0_MASK, "iram0", 0x40000000);
+        ESP32S2_cache_init_region(cs, &cs->drom0, ESP32S2_DCACHE, "drom0",
+                                0x3F400000, 0xbaadbaad);
+        ESP32S2_cache_init_region(cs, &cs->iram0, ESP32S2_ICACHE, "iram0",
+                                0x40000000, 0x00000000);
     }
+#endif
+
 
     qdev_init_gpio_out_named(DEVICE(sbd), &s->appcpu_stall_req, ESP32S2_DPORT_APPCPU_STALL_GPIO, 1);
     qdev_init_gpio_out_named(DEVICE(sbd), &s->appcpu_reset_req, ESP32S2_DPORT_APPCPU_RESET_GPIO, 1);

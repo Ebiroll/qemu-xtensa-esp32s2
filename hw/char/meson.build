@@ -35,6 +35,7 @@ softmmu_ss.add(when: 'CONFIG_SH4', if_true: files('sh_serial.c'))
 softmmu_ss.add(when: 'CONFIG_STM32F2XX_USART', if_true: files('stm32f2xx_usart.c'))
 softmmu_ss.add(when: 'CONFIG_MCHP_PFSOC_MMUART', if_true: files('mchp_pfsoc_mmuart.c'))
 softmmu_ss.add(when: 'CONFIG_XTENSA_ESP32', if_true: files('esp32_uart.c'))
+softmmu_ss.add(when: 'CONFIG_XTENSA_ESP32S2', if_true: files('esp32s2_uart.c'))
 
 specific_ss.add(when: 'CONFIG_HTIF', if_true: files('riscv_htif.c'))
 specific_ss.add(when: 'CONFIG_TERMINAL3270', if_true: files('terminal3270.c'))
