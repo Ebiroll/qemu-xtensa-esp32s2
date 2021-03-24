@@ -10,29 +10,6 @@
 typedef struct Esp32DportState Esp32DportState;
 typedef struct Esp32CacheState Esp32CacheState;
 
-#define TYPE_ESP32S2_INTMATRIX "misc.esp32s2.intmatrix"
-#define ESP32S2_INTMATRIX(obj) OBJECT_CHECK(Esp32IntMatrixState, (obj), TYPE_ESP32S2_INTMATRIX)
-
-typedef struct Esp32IntMatrixState {
-    SysBusDevice parent_obj;
-
-    MemoryRegion iomem;
-    qemu_irq *outputs[ESP32S2_CPU_COUNT];
-    uint8_t irq_map[ESP32S2_CPU_COUNT][ESP32S2_INT_MATRIX_INPUTS];
-
-    /* properties */
-    XtensaCPU *cpu[ESP32S2_CPU_COUNT];
-} Esp32IntMatrixState;
-
-
-#define TYPE_ESP32S2_CROSSCORE_INT "misc.esp32s2.crosscoreint"
-#define ESP32S2_CROSSCORE_INT(obj) OBJECT_CHECK(Esp32CrosscoreInt, (obj), TYPE_ESP32S2_CROSSCORE_INT)
-
-typedef struct Esp32CrosscoreInt {
-    SysBusDevice parent_obj;
-    MemoryRegion iomem;
-    qemu_irq irqs[ESP32_DPORT_CROSSCORE_INT_COUNT];
-} Esp32CrosscoreInt;
 
 
 #define TYPE_ESP32S2_DPORT "misc.esp32s2.dport"
@@ -77,8 +54,8 @@ typedef struct Esp32DportState {
 
     MemoryRegion iomem;
     int cpu_count;
-    Esp32IntMatrixState intmatrix;
-    Esp32CrosscoreInt   crosscore_int;
+    //Esp32IntMatrixState intmatrix;
+    //Esp32CrosscoreInt   crosscore_int;
     Esp32CacheState cache_state[ESP32S2_CPU_COUNT];
     BlockBackend *flash_blk;
     qemu_irq appcpu_stall_req;

@@ -10,6 +10,7 @@ xtensa_ss.add(files(
   'core-test_kc705_be.c',
   'core-test_mmuhifi_c3.c',
   'core-esp32.c',
+  'core-esp32s2.c',
   'cpu.c',
   'exc_helper.c',
   'fpu_helper.c',
@@ -20,7 +21,7 @@ xtensa_ss.add(files(
   'win_helper.c',
   'xtensa-isa.c',
 ))
-#  'core-esp32s2.c',
+#  
 
 
 xtensa_softmmu_ss = ss.source_set()
