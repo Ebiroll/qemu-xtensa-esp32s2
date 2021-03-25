@@ -20,6 +20,8 @@ config XTENSA_ESP32
     select UNIMP
     select OPENCORES_ETH
     select TMP105
+    select SSD1306 # OLED display
+
 
 config XTENSA_ESP32S2
     bool
@@ -28,4 +30,4 @@ config XTENSA_ESP32S2
     select UNIMP
     select OPENCORES_ETH
     select TMP105
-    select SSD0303 # OLED display
+    select SSD1306 # OLED display

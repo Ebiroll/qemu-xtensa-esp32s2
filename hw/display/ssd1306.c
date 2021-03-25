@@ -12,6 +12,7 @@
    implement one.  Most of the commends relating to brightness and geometry
    setup are ignored. */
 #include "qemu/osdep.h"
+#include "migration/vmstate.h"
 #include "hw/i2c/i2c.h"
 #include "ui/console.h"
 #include "qom/object.h"
@@ -94,10 +95,10 @@ OBJECT_DECLARE_SIMPLE_TYPE(ssd1306_state, SSD1306)
 ssd1306_state *the_ssd1306=NULL;
 
 
-static int ssd1306_recv(I2CSlave *i2c)
+static uint8_t ssd1306_recv(I2CSlave *i2c)
 {
     BADF("Reads not implemented\n");
-    return -1;
+    return 0xff;
 }
 
 static int ssd1306_send(I2CSlave *i2c, uint8_t data)
@@ -340,7 +341,7 @@ static int ssd1306_send(I2CSlave *i2c, uint8_t data)
     return 0;
 }
 
-static void ssd1306_event(I2CSlave *i2c, enum i2c_event event)
+static int ssd1306_event(I2CSlave *i2c, enum i2c_event event)
 {
     ssd1306_state *s = SSD1306(i2c);
     //ssd1306_state *s = the_ssd1306;
@@ -358,6 +359,7 @@ static void ssd1306_event(I2CSlave *i2c, enum i2c_event event)
         /* Nothing to do.  */
         break;
     }
+    return 0;
 }
 
 static void ssd1306_update_display(void *opaque)

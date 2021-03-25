@@ -327,6 +327,12 @@ static void ESP32S2_soc_realize(DeviceState *dev, Error **errp)
     const struct MemmapEntry *memmap = ESP32S2_memmap;
     MemoryRegion *sys_mem = get_system_memory();
 
+    qbus_create_inplace(&s->periph_bus, sizeof(s->periph_bus),
+                        TYPE_SYSTEM_BUS, DEVICE(s), "esp32s2-periph-bus");
+    qbus_create_inplace(&s->rtc_bus, sizeof(s->rtc_bus),
+                        TYPE_SYSTEM_BUS, DEVICE(s), "esp32s2-rtc-bus");
+
+
     MemoryRegion *dram = g_new(MemoryRegion, 1);
     MemoryRegion *iram = g_new(MemoryRegion, 1);
     MemoryRegion *drom = g_new(MemoryRegion, 1);
@@ -388,7 +394,7 @@ static void ESP32S2_soc_realize(DeviceState *dev, Error **errp)
         qdev_realize(DEVICE(&s->cpu[i]), NULL, &error_fatal);
     }
 
-    // qdev_realize(DEVICE(&s->dport), &s->periph_bus, &error_fatal);
+    qdev_realize(DEVICE(&s->dport), &s->periph_bus, &error_fatal);
     // OLAS, TODO DPORT!!
     
         //qdev_realize(DEVICE(&s->dport), NULL, &error_fatal);
@@ -414,7 +420,7 @@ static void ESP32S2_soc_realize(DeviceState *dev, Error **errp)
         }
     }
 
-    //qdev_realize(DEVICE(&s->sha), &s->periph_bus, &error_fatal);
+    qdev_realize(DEVICE(&s->sha), &s->periph_bus, &error_fatal);
     ESP32S2_soc_add_periph_device(sys_mem, &s->sha, S2_DR_REG_SHA_BASE);
 
     qdev_realize(DEVICE(&s->rtc_cntl), &s->periph_bus, &error_abort);
@@ -739,7 +745,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(Esp32S2MachineState, ESP32S2_MACHINE)
 
 
 
-static void ESP32S2_machine_init_spi_flash(MachineState *machine, Esp32S2SocState *s, BlockBackend* blk)
+static void ESP32S2_machine_init_spi_flash(Esp32S2SocState *s, BlockBackend* blk)
 {
    /* "main" flash chip is attached to SPI1 */
     DeviceState *spi_master = DEVICE(&s->spi[1]);
@@ -1283,27 +1289,28 @@ static void ESP32S2_machine_init(MachineState *machine)
     qemu_log("Done\n");
 
     if (blk) {
-        s->myunimp.flash_blk = blk;
-    }
-
-    if (blk) {
-        s->dport.flash_blk = blk;
+        ss->dport.flash_blk = blk;
     }
     qdev_prop_set_chr(DEVICE(ss), "serial0", serial_hd(0));
+
+    if (blk) {
+        s->myunimp.flash_blk = blk;
+    }
 
     qdev_realize(DEVICE(ss),NULL, &error_fatal);
 
     if (blk) {
-        ESP32S2_machine_init_spi_flash(machine, s, blk);
+        // This is not used properly by this implementation....
+        ESP32S2_machine_init_spi_flash(ss, blk);
     }
-    ESP32S2_machine_init_i2c(s);
+    ESP32S2_machine_init_i2c(ss);
 
     ESP32S2_machine_init_openeth(s);
 
     /* Need MMU initialized prior to ELF loading,
      * so that ELF gets loaded into virtual addresses
      */
-    cpu_reset(CPU(&s->cpu[0]));
+    cpu_reset(CPU(&ss->cpu[0]));
  
    /*
      MemoryRegion *system_memory = get_system_memory();
