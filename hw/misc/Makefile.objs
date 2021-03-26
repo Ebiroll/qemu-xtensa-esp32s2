@@ -98,5 +98,6 @@ obj-$(CONFIG_ESP32) += esp32_dport.o
 obj-$(CONFIG_ESP32) += esp32_intmatrix.o
 obj-$(CONFIG_ESP32) += esp32_crosscore_int.o
 obj-$(CONFIG_ESP32) += esp32_rtc_cntl.o
+obj-$(CONFIG_ESP32) += esp32s2_rtc_cntl.o
 obj-$(CONFIG_ESP32) += esp32_rng.o
 obj-$(CONFIG_ESP32) += esp32_sha.o

@@ -24,8 +24,8 @@
 #include "hw/char/esp32s2_uart.h"
 #include "hw/gpio/esp32s2_gpio.h"
 #include "hw/misc/esp32s2_dport.h"
-#include "hw/misc/esp32_rtc_cntl.h"
-#include "hw/misc/esp32_rng.h"
+#include "hw/misc/esp32s2_rtc_cntl.h"
+#include "hw/misc/esp32s2_rng.h"
 #include "hw/misc/esp32s2_sha.h"
 #include "hw/timer/esp32_frc_timer.h"
 #include "hw/timer/esp32_timg.h"
@@ -150,7 +150,7 @@ typedef struct Esp32S2SocState {
     //Esp32IntMatrixState intmatrix;
     ESP32S2UARTState uart[ESP32S2_UART_COUNT];
     Esp32s2GpioState gpio;
-    Esp32RngState rng;
+    Esp32S2RngState rng;
     Esp32RtcCntlState rtc_cntl;
     Esp32FrcTimerState frc_timer[ESP32S2_FRC_COUNT];
     Esp32TimgState timg[ESP32S2_TIMG_COUNT];
@@ -607,7 +607,7 @@ static void esp32s2_soc_init(Object *obj)
     // TODO, int matrix
     //object_initialize_child(obj, "intmatrix", &s->intmatrix, TYPE_ESP32S2_INTMATRIX);
 
-    object_initialize_child(obj, "rtc_cntl", &s->rtc_cntl, TYPE_ESP32_RTC_CNTL);
+    object_initialize_child(obj, "rtc_cntl", &s->rtc_cntl, TYPE_ESP32S2_RTC_CNTL);
 
     object_initialize_child(obj, "myunimp", &s->myunimp, TYPE_ESP32S2_MYUNIMP);
 
@@ -635,7 +635,7 @@ static void esp32s2_soc_init(Object *obj)
         object_initialize_child(obj, name, &s->i2c[i], TYPE_ESP32_I2C);
     }
 
-    object_initialize_child(obj, "rng", &s->rng, TYPE_ESP32_RNG);
+    object_initialize_child(obj, "rng", &s->rng, TYPE_ESP32S2_RNG);
 
     object_initialize_child(obj, "sha", &s->sha, TYPE_ESP32S2_SHA);
 
