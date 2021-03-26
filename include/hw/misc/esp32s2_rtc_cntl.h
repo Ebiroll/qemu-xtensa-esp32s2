@@ -3,53 +3,52 @@
 #include "hw/hw.h"
 #include "hw/sysbus.h"
 #include "hw/registerfields.h"
-#include "target/xtensa/cpu.h"
 #include "target/xtensa/cpu-qom.h"
 #include "hw/misc/esp32s2_reg.h"
 #define TYPE_ESP32S2_RTC_CNTL "misc.esp32s2.rtc_cntl"
-#define ESP32_RTC_CNTL(obj) OBJECT_CHECK(Esp32RtcCntlState, (obj), TYPE_ESP32_RTC_CNTL)
+#define ESP32S2_RTC_CNTL(obj) OBJECT_CHECK(Esp32S2RtcCntlState, (obj), TYPE_ESP32S2_RTC_CNTL)
 
-#define ESP32_RTC_DIG_RESET_GPIO    "dig-reset"
-#define ESP32_RTC_CPU_RESET_GPIO    "cpu-reset"
-#define ESP32_RTC_CPU_STALL_GPIO    "cpu-stall"
-#define ESP32_RTC_CLK_UPDATE_GPIO   "clk-update"
+#define ESP32S2_RTC_DIG_RESET_GPIO    "dig-reset"
+#define ESP32S2_RTC_CPU_RESET_GPIO    "cpu-reset"
+#define ESP32S2_RTC_CPU_STALL_GPIO    "cpu-stall"
+#define ESP32S2_RTC_CLK_UPDATE_GPIO   "clk-update"
 
-typedef enum Esp32ResetCause {
-    ESP32_POWERON_RESET = 1,
-    ESP32_SW_SYS_RESET = 3,
-    ESP32_OWDT_RESET = 4,
-    ESP32_DEEPSLEEP_RESET = 5,
-    ESP32_SDIO_RESET = 6,
-    ESP32_TG0WDT_SYS_RESET = 7,
-    ESP32_TG1WDT_SYS_RESET = 8,
-    ESP32_RTCWDT_SYS_RESET = 9,
-    ESP32_TGWDT_CPU_RESET = 11,
-    ESP32_SW_CPU_RESET = 12,
-    ESP32_RTCWDT_CPU_RESET = 13,
-    ESP32_EXT_CPU_RESET = 14,
-    ESP32_RTCWDT_BROWN_OUT_RESET = 15,
-    ESP32_RTCWDT_RTC_RESET = 16
-} Esp32ResetCause;
+typedef enum Esp32S2ResetCause {
+    ESP32S2_POWERON_RESET = 1,
+    ESP32S2_SW_SYS_RESET = 3,
+    ESP32S2_OWDT_RESET = 4,
+    ESP32S2_DEEPSLEEP_RESET = 5,
+    ESP32S2_SDIO_RESET = 6,
+    ESP32S2_TG0WDT_SYS_RESET = 7,
+    ESP32S2_TG1WDT_SYS_RESET = 8,
+    ESP32S2_RTCWDT_SYS_RESET = 9,
+    ESP32S2_TGWDT_CPU_RESET = 11,
+    ESP32S2_SW_CPU_RESET = 12,
+    ESP32S2_RTCWDT_CPU_RESET = 13,
+    ESP32S2_EXT_CPU_RESET = 14,
+    ESP32S2_RTCWDT_BROWN_OUT_RESET = 15,
+    ESP32S2_RTCWDT_RTC_RESET = 16
+} Esp32S2ResetCause;
 
-typedef enum Esp32SocClkSel {
-    ESP32_SOC_CLK_XTAL = 0,
-    ESP32_SOC_CLK_PLL = 1,
-    ESP32_SOC_CLK_8M = 2,
-    ESP32_SOC_CLK_APLL = 3
-} Esp32SocClkSel;
+typedef enum Esp32S2SocClkSel {
+    ESP32S2_SOC_CLK_XTAL = 0,
+    ESP32S2_SOC_CLK_PLL = 1,
+    ESP32S2_SOC_CLK_8M = 2,
+    ESP32S2_SOC_CLK_APLL = 3
+} Esp32S2SocClkSel;
 
-typedef enum Esp32FastClkSel {
-    ESP32_FAST_CLK_XTALD4 = 0,
-    ESP32_FAST_CLK_8M = 1
-} Esp32FastClkSel;
+typedef enum Esp32S2FastClkSel {
+    ESP32S2_FAST_CLK_XTALD4 = 0,
+    ESP32S2_FAST_CLK_8M = 1
+} Esp32S2FastClkSel;
 
-typedef enum Esp32SlowClkSel {
-    ESP32_SLOW_CLK_RC = 0,
-    ESP32_SLOW_CLK_32KXTAL = 1,
-    ESP32_SLOW_CLK_8MD256 = 2
-} Esp32SlowClkSel;
+typedef enum Esp32S2SlowClkSel {
+    ESP32S2_SLOW_CLK_RC = 0,
+    ESP32S2_SLOW_CLK_32KXTAL = 1,
+    ESP32S2_SLOW_CLK_8MD256 = 2
+} Esp32S2SlowClkSel;
 
-typedef struct Esp32RtcCntlState {
+typedef struct Esp32S2RtcCntlState {
     SysBusDevice parent_obj;
 
     MemoryRegion iomem;
@@ -62,10 +61,10 @@ typedef struct Esp32RtcCntlState {
 
     uint32_t xtal_apb_freq;
     uint32_t pll_apb_freq;
-    Esp32SocClkSel soc_clk;
-    Esp32FastClkSel rtc_fastclk;
+    Esp32S2SocClkSel soc_clk;
+    Esp32S2FastClkSel rtc_fastclk;
     uint32_t rtc_fastclk_freq;
-    Esp32SlowClkSel rtc_slowclk;
+    Esp32S2SlowClkSel rtc_slowclk;
     uint32_t rtc_slowclk_freq;
     int64_t time_base_ns;
 
@@ -73,9 +72,9 @@ typedef struct Esp32RtcCntlState {
     uint64_t time_reg;
     uint32_t sw_cpu_stall_reg;
     uint32_t scratch_reg[ESP32S2_RTC_CNTL_SCRATCH_REG_COUNT];
-    Esp32ResetCause reset_cause[ESP32S2_CPU_COUNT];
+    Esp32S2ResetCause reset_cause[ESP32S2_CPU_COUNT];
     bool stat_vector_sel[ESP32S2_CPU_COUNT];
-} Esp32RtcCntlState;
+} Esp32S2RtcCntlState;
 
 REG32(RTC_CNTL_OPTIONS0, 0x00)
     FIELD(RTC_CNTL_OPTIONS0, SW_SYS_RESET, 31, 1)
@@ -116,4 +115,4 @@ REG32(RTC_CNTL_STORE6, 0xb8)
 REG32(RTC_CNTL_STORE7, 0xbc)
 REG32(RTC_CNTL_DATE,   0x13c)
 
-#define ESP32_RTC_CNTL_SIZE (A_RTC_CNTL_DATE + 4)
+#define ESP32S2_RTC_CNTL_SIZE (A_RTC_CNTL_DATE + 4)

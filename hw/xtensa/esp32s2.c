@@ -49,6 +49,8 @@
 #include "migration/vmstate.h"
 
 
+BlockBackend *gFlashWorkaround=NULL;
+
 // TODO, map flash when Cache_Ibus_MMU_Set is called
 
 #define TYPE_ESP32S2_SOC "xtensa.esp32s2"
@@ -129,15 +131,15 @@ static const struct MemmapEntry {
 #define TYPE_ESP32S2_MYUNIMP     "esp32s2.myunimp"
 
 
-typedef struct Esp32UnimpState {
+typedef struct Esp32S2UnimpState {
     SysBusDevice parent_obj;
 
-    BlockBackend *flash_blk;
+    BlockBackend *flash_blk_unimp;
     uint32_t mmu_table[0x1000];
     uint32_t cache_value;
     MemoryRegion iomem;
     qemu_irq irq;
-} Esp32UnimpState;
+} Esp32S2UnimpState;
 
 
 typedef struct Esp32S2SocState {
@@ -151,7 +153,7 @@ typedef struct Esp32S2SocState {
     ESP32S2UARTState uart[ESP32S2_UART_COUNT];
     Esp32s2GpioState gpio;
     Esp32S2RngState rng;
-    Esp32RtcCntlState rtc_cntl;
+    Esp32S2RtcCntlState rtc_cntl;
     Esp32FrcTimerState frc_timer[ESP32S2_FRC_COUNT];
     Esp32TimgState timg[ESP32S2_TIMG_COUNT];
     Esp32S2SysTimerState systimer;
@@ -159,7 +161,7 @@ typedef struct Esp32S2SocState {
     Esp32I2CState i2c[ESP32_I2C_COUNT];
     Esp32S2ShaState sha;
     Esp32S2EfuseState efuse;
-    Esp32UnimpState myunimp;
+    Esp32S2UnimpState myunimp;
     DeviceState *eth;
 
     BusState rtc_bus;
@@ -279,7 +281,7 @@ static void ESP32S2_clk_update(void* opaque, int n, int level)
 
     /* APB clock */
     uint32_t apb_clk_freq, cpu_clk_freq;
-    if (s->rtc_cntl.soc_clk == ESP32_SOC_CLK_PLL) {
+    if (s->rtc_cntl.soc_clk == ESP32S2_SOC_CLK_PLL) {
         const uint32_t cpu_clk_mul[] = {1, 2, 3};
         apb_clk_freq = s->rtc_cntl.pll_apb_freq;
         cpu_clk_freq = cpu_clk_mul[s->dport.cpuperiod_sel] * apb_clk_freq;
@@ -426,15 +428,15 @@ static void ESP32S2_soc_realize(DeviceState *dev, Error **errp)
     qdev_realize(DEVICE(&s->rtc_cntl), &s->periph_bus, &error_abort);
     ESP32S2_soc_add_periph_device(sys_mem,  &s->rtc_cntl, S2_DR_REG_RTCCNTL_BASE);
 
-    qdev_connect_gpio_out_named(DEVICE(&s->rtc_cntl), ESP32_RTC_DIG_RESET_GPIO, 0,
-                                qdev_get_gpio_in_named(dev, ESP32_RTC_DIG_RESET_GPIO, 0));
-    qdev_connect_gpio_out_named(DEVICE(&s->rtc_cntl), ESP32_RTC_CLK_UPDATE_GPIO, 0,
-                                qdev_get_gpio_in_named(dev, ESP32_RTC_CLK_UPDATE_GPIO, 0));
+    qdev_connect_gpio_out_named(DEVICE(&s->rtc_cntl), ESP32S2_RTC_DIG_RESET_GPIO, 0,
+                                qdev_get_gpio_in_named(dev, ESP32S2_RTC_DIG_RESET_GPIO, 0));
+    qdev_connect_gpio_out_named(DEVICE(&s->rtc_cntl), ESP32S2_RTC_CLK_UPDATE_GPIO, 0,
+                                qdev_get_gpio_in_named(dev, ESP32S2_RTC_CLK_UPDATE_GPIO, 0));
     for (int i = 0; i < ms->smp.cpus; ++i) {
-        qdev_connect_gpio_out_named(DEVICE(&s->rtc_cntl), ESP32_RTC_CPU_RESET_GPIO, i,
-                                    qdev_get_gpio_in_named(dev, ESP32_RTC_CPU_RESET_GPIO, i));
-        qdev_connect_gpio_out_named(DEVICE(&s->rtc_cntl), ESP32_RTC_CPU_STALL_GPIO, i,
-                                    qdev_get_gpio_in_named(dev, ESP32_RTC_CPU_STALL_GPIO, i));
+        qdev_connect_gpio_out_named(DEVICE(&s->rtc_cntl), ESP32S2_RTC_CPU_RESET_GPIO, i,
+                                    qdev_get_gpio_in_named(dev, ESP32S2_RTC_CPU_RESET_GPIO, i));
+        qdev_connect_gpio_out_named(DEVICE(&s->rtc_cntl), ESP32S2_RTC_CPU_STALL_GPIO, i,
+                                    qdev_get_gpio_in_named(dev, ESP32S2_RTC_CPU_STALL_GPIO, i));
     }
 
     qdev_realize(DEVICE(&s->gpio), &s->periph_bus, &error_fatal);
@@ -649,10 +651,10 @@ static void esp32s2_soc_init(Object *obj)
     // qdev_init_gpio_in_named(DEVICE(s), esp32_timg_sys_reset, ESP32_TIMG_WDT_SYS_RESET_GPIO, 2);
 
 
-    qdev_init_gpio_in_named(DEVICE(s), ESP32S2_dig_reset, ESP32_RTC_DIG_RESET_GPIO, 1);
-    qdev_init_gpio_in_named(DEVICE(s), ESP32S2_cpu_reset, ESP32_RTC_CPU_RESET_GPIO, ESP32S2_CPU_COUNT);
-    qdev_init_gpio_in_named(DEVICE(s), ESP32S2_cpu_stall, ESP32_RTC_CPU_STALL_GPIO, ESP32S2_CPU_COUNT);
-    qdev_init_gpio_in_named(DEVICE(s), ESP32S2_clk_update, ESP32_RTC_CLK_UPDATE_GPIO, 1);
+    qdev_init_gpio_in_named(DEVICE(s), ESP32S2_dig_reset, ESP32S2_RTC_DIG_RESET_GPIO, 1);
+    qdev_init_gpio_in_named(DEVICE(s), ESP32S2_cpu_reset, ESP32S2_RTC_CPU_RESET_GPIO, ESP32S2_CPU_COUNT);
+    qdev_init_gpio_in_named(DEVICE(s), ESP32S2_cpu_stall, ESP32S2_RTC_CPU_STALL_GPIO, ESP32S2_CPU_COUNT);
+    qdev_init_gpio_in_named(DEVICE(s), ESP32S2_clk_update, ESP32S2_RTC_CLK_UPDATE_GPIO, 1);
 
     const char *rom_filename = "s2rom.bin";
     //const char *irom_filename = "irom1.bin";
@@ -781,13 +783,12 @@ static void ESP32S2_machine_init_openeth(Esp32S2SocState *ss)
 }
 /**************/
 
-#define ESP32S2_UNIMP(obj) OBJECT_CHECK(Esp32UnimpState, (obj), TYPE_ESP32S2_MYUNIMP)
-
+#define ESP32S2_UNIMP(obj) OBJECT_CHECK(Esp32S2UnimpState, (obj), TYPE_ESP32S2_MYUNIMP)
 #define ESP32S2_UNIMP_VAL 0x0a 
 
 static uint64_t ESP32S2_unimp_read(void *opaque, hwaddr addr, unsigned int size)
 {
-    Esp32UnimpState *s = ESP32S2_UNIMP(opaque);
+    Esp32S2UnimpState *s = ESP32S2_UNIMP(opaque);
     //printf("unimp read  %08X\n",(unsigned int)addr);
 
     uint64_t r = 0;
@@ -1072,7 +1073,7 @@ void Cache_MMU_Init(void)
 static void ESP32S2_unimp_write(void *opaque, hwaddr addr,
                        uint64_t value, unsigned int size)
 {
-    Esp32UnimpState *s = ESP32S2_UNIMP(opaque);
+    Esp32S2UnimpState *s = ESP32S2_UNIMP(opaque);
     //printf("unimp write  %08X,%08X\n",(unsigned int)addr,(unsigned int)value);
     //if (value!=0x4000) printf("unimp write  %08X,%08X\n",(unsigned int)addr,(unsigned int)value);
 
@@ -1106,7 +1107,7 @@ static void ESP32S2_unimp_write(void *opaque, hwaddr addr,
                 printf("i write  %08X,%08X,%08X\n",(unsigned int)addr,(unsigned int)value,esp_addr);
 
 
-                blk_pread(s->flash_blk, flash_addr, /*cache_page*/tmp_flash_cache, ESP32S2_CACHE_PAGE_SIZE);
+                blk_pread(/*s->flash_blk_unimp*/ gFlashWorkaround, flash_addr, /*cache_page*/tmp_flash_cache, ESP32S2_CACHE_PAGE_SIZE);
                 printf("%08X,%08X,b %08X,p %08X\n",*(uint32_t *)tmp_flash_cache,*(uint32_t *)&tmp_flash_cache[4],*(uint32_t *)&tmp_flash_cache[0x1000],*(uint32_t *)&tmp_flash_cache[0x8000]);
                 cpu_physical_memory_write(esp_addr, tmp_flash_cache, ESP32S2_CACHE_PAGE_SIZE );                
             }
@@ -1141,7 +1142,7 @@ static void ESP32S2_unimp_write(void *opaque, hwaddr addr,
             if ((value & 0x8000) == 0x8000) {
                 printf("d write  %08X,%08X,%08X\n",(unsigned int)addr,(unsigned int)value,phys_addr);
                 printf("MMU Map flash %08X to %08X\n",flash_addr,phys_addr);
-                blk_pread(s->flash_blk, flash_addr, /*cache_page*/tmp_flash_cache, ESP32S2_CACHE_PAGE_SIZE);
+                blk_pread(/*s->flash_blk_unimp*/ gFlashWorkaround, flash_addr, /*cache_page*/tmp_flash_cache, ESP32S2_CACHE_PAGE_SIZE);
                 printf("%08X,%08X,b %08X,p %08X\n",*(uint32_t *)tmp_flash_cache,*(uint32_t *)&tmp_flash_cache[4],*(uint32_t *)&tmp_flash_cache[0x1000],*(uint32_t *)&tmp_flash_cache[0x8000]);
                 cpu_physical_memory_write(phys_addr, tmp_flash_cache, ESP32S2_CACHE_PAGE_SIZE );
             }
@@ -1173,7 +1174,7 @@ static void ESP32S2_unimp_write(void *opaque, hwaddr addr,
             if ((value & 0x8000) == 0x8000) {
                 printf("unimp write  %08X,%08X,%08X\n",(unsigned int)addr,(unsigned int)value,phys_addr);
                 printf("MMU Map flash %08X to %08X\n",flash_addr,phys_addr);
-                blk_pread(s->flash_blk, flash_addr, /*cache_page*/tmp_flash_cache, ESP32S2_CACHE_PAGE_SIZE);
+                blk_pread(/*s->flash_blk_unimp*/ gFlashWorkaround, flash_addr, /*cache_page*/tmp_flash_cache, ESP32S2_CACHE_PAGE_SIZE);
                 printf("%08X,%08X,b %08X,p %08X\n",*(uint32_t *)tmp_flash_cache,*(uint32_t *)&tmp_flash_cache[4],*(uint32_t *)&tmp_flash_cache[0x1000],*(uint32_t *)&tmp_flash_cache[0x8000]);
                 cpu_physical_memory_write(phys_addr, tmp_flash_cache, ESP32S2_CACHE_PAGE_SIZE );
             }
@@ -1191,7 +1192,7 @@ static const MemoryRegionOps unimp_ops = {
 
 static void ESP32S2_unimp_reset(DeviceState *dev)
 { 
-     Esp32UnimpState *s = ESP32S2_UNIMP(dev);
+     Esp32S2UnimpState *s = ESP32S2_UNIMP(dev);
 
     for (int i = 0; i < ESP32S2_CACHE_PAGES_PER_REGION; ++i) {
         s->mmu_table[i] = ESP32S2_CACHE_MMU_ENTRY_CHANGED;
@@ -1207,7 +1208,7 @@ static void ESP32S2_unimp_realize(DeviceState *dev, Error **errp)
 
 static void ESP32S2_unimp_init(Object *obj)
 {
-    Esp32UnimpState *s = ESP32S2_UNIMP(obj);
+    Esp32S2UnimpState *s = ESP32S2_UNIMP(obj);
     SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
 
     memory_region_init_io(&s->iomem, obj, &unimp_ops, s,
@@ -1230,20 +1231,20 @@ static void ESP32S2_unimp_class_init(ObjectClass *klass, void *data)
     device_class_set_props(dc,ESP32S2_gpio_properties);
 }
 
-static const TypeInfo ESP32S2_gpio_info = {
+static const TypeInfo ESP32S2_myunimp_info = {
     .name = TYPE_ESP32S2_MYUNIMP,
     .parent = TYPE_SYS_BUS_DEVICE,
-    .instance_size = sizeof(Esp32UnimpState),
+    .instance_size = sizeof(Esp32S2UnimpState),
     .instance_init = ESP32S2_unimp_init,
     .class_init = ESP32S2_unimp_class_init
 };
 
-static void ESP32S2_gpio_register_types(void)
+static void ESP32S2_myunimp_register_types(void)
 {
-    type_register_static(&ESP32S2_gpio_info);
+    type_register_static(&ESP32S2_myunimp_info);
 }
 
-type_init(ESP32S2_gpio_register_types)
+type_init(ESP32S2_myunimp_register_types)
 
 
 
@@ -1294,7 +1295,7 @@ static void ESP32S2_machine_init(MachineState *machine)
     qdev_prop_set_chr(DEVICE(ss), "serial0", serial_hd(0));
 
     if (blk) {
-        s->myunimp.flash_blk = blk;
+        s->myunimp.flash_blk_unimp = blk;
     }
 
     qdev_realize(DEVICE(ss),NULL, &error_fatal);
@@ -1302,15 +1303,18 @@ static void ESP32S2_machine_init(MachineState *machine)
     if (blk) {
         // This is not used properly by this implementation....
         ESP32S2_machine_init_spi_flash(ss, blk);
+        gFlashWorkaround=blk;
     }
     ESP32S2_machine_init_i2c(ss);
 
-    ESP32S2_machine_init_openeth(s);
+    ESP32S2_machine_init_openeth(ss);
 
     /* Need MMU initialized prior to ELF loading,
      * so that ELF gets loaded into virtual addresses
      */
     cpu_reset(CPU(&ss->cpu[0]));
+
+
  
    /*
      MemoryRegion *system_memory = get_system_memory();
