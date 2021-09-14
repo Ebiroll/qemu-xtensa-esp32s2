@@ -74,6 +74,11 @@ enum powerpc_mmu_t {
     POWERPC_MMU_3_00       = POWERPC_MMU_64 | 0x00000005,
 };
 
+static inline bool mmu_is_64bit(powerpc_mmu_t mmu_model)
+{
+    return mmu_model & POWERPC_MMU_64;
+}
+
 /*****************************************************************************/
 /* Exception model                                                           */
 typedef enum powerpc_excp_t powerpc_excp_t;
@@ -111,6 +116,8 @@ enum powerpc_excp_t {
     POWERPC_EXCP_POWER8,
     /* POWER9 exception model           */
     POWERPC_EXCP_POWER9,
+    /* POWER10 exception model           */
+    POWERPC_EXCP_POWER10,
 };
 
 /*****************************************************************************/
@@ -191,8 +198,6 @@ struct PowerPCCPUClass {
     int n_host_threads;
     void (*init_proc)(CPUPPCState *env);
     int  (*check_pow)(CPUPPCState *env);
-    int (*handle_mmu_fault)(PowerPCCPU *cpu, vaddr eaddr, int rwx, int mmu_idx);
-    bool (*interrupts_big_endian)(PowerPCCPU *cpu);
 };
 
 #ifndef CONFIG_USER_ONLY
@@ -213,7 +218,7 @@ extern const VMStateDescription vmstate_ppc_timebase;
     .offset     = vmstate_offset_value(_state, _field, PPCTimebase),  \
 }
 
-void cpu_ppc_clock_vm_state_change(void *opaque, int running,
+void cpu_ppc_clock_vm_state_change(void *opaque, bool running,
                                    RunState state);
 #endif
 

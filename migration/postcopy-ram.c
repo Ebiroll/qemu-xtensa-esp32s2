@@ -17,6 +17,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu/rcu.h"
 #include "exec/target_page.h"
 #include "migration.h"
 #include "qemu-file.h"
@@ -30,6 +31,7 @@
 #include "qemu/error-report.h"
 #include "trace.h"
 #include "hw/boards.h"
+#include "exec/ramblock.h"
 
 /* Arbitrary limit on size of each discard command,
  * keeps them around ~200 bytes
@@ -145,14 +147,11 @@ static struct PostcopyBlocktimeContext *blocktime_context_new(void)
 static uint32List *get_vcpu_blocktime_list(PostcopyBlocktimeContext *ctx)
 {
     MachineState *ms = MACHINE(qdev_get_machine());
-    uint32List *list = NULL, *entry = NULL;
+    uint32List *list = NULL;
     int i;
 
     for (i = ms->smp.cpus - 1; i >= 0; i--) {
-        entry = g_new0(uint32List, 1);
-        entry->value = ctx->vcpu_blocktime[i];
-        entry->next = list;
-        list = entry;
+        QAPI_LIST_PREPEND(list, ctx->vcpu_blocktime[i]);
     }
 
     return list;
@@ -456,6 +455,13 @@ static int init_range(RAMBlock *rb, void *opaque)
     trace_postcopy_init_range(block_name, host_addr, offset, length);
 
     /*
+     * Save the used_length before running the guest. In case we have to
+     * resize RAM blocks when syncing RAM block sizes from the source during
+     * precopy, we'll update it manually via the ram block notifier.
+     */
+    rb->postcopy_length = length;
+
+    /*
      * We need the whole of RAM to be truly empty for postcopy, so things
      * like ROMs and any data tables built during init must be zero'd
      * - we're going to get the copy from the source anyway.
@@ -477,7 +483,7 @@ static int cleanup_range(RAMBlock *rb, void *opaque)
     const char *block_name = qemu_ram_get_idstr(rb);
     void *host_addr = qemu_ram_get_host_addr(rb);
     ram_addr_t offset = qemu_ram_get_offset(rb);
-    ram_addr_t length = qemu_ram_get_used_length(rb);
+    ram_addr_t length = rb->postcopy_length;
     MigrationIncomingState *mis = opaque;
     struct uffdio_range range_struct;
     trace_postcopy_cleanup_range(block_name, host_addr, offset, length);
@@ -583,7 +589,7 @@ static int nhp_range(RAMBlock *rb, void *opaque)
     const char *block_name = qemu_ram_get_idstr(rb);
     void *host_addr = qemu_ram_get_host_addr(rb);
     ram_addr_t offset = qemu_ram_get_offset(rb);
-    ram_addr_t length = qemu_ram_get_used_length(rb);
+    ram_addr_t length = rb->postcopy_length;
     trace_postcopy_nhp_range(block_name, host_addr, offset, length);
 
     /*
@@ -627,7 +633,7 @@ static int ram_block_enable_notify(RAMBlock *rb, void *opaque)
     struct uffdio_register reg_struct;
 
     reg_struct.range.start = (uintptr_t)qemu_ram_get_host_addr(rb);
-    reg_struct.range.len = qemu_ram_get_used_length(rb);
+    reg_struct.range.len = rb->postcopy_length;
     reg_struct.mode = UFFDIO_REGISTER_MODE_MISSING;
 
     /* Now tell our userfault_fd that it's responsible for this area */

@@ -139,24 +139,34 @@ static void esp32_i2c_write(void * opaque, hwaddr addr, uint64_t value, unsigned
         break;
     case A_I2C_CMD ... (A_I2C_CMD + ESP32_I2C_CMD_COUNT * 4):
         s->cmd_reg[(addr - A_I2C_CMD) / 4] = value;
+        break;
     case A_I2C_TIMEOUT:
         s->timeout_reg = value;
+        break;
     case A_I2C_SDA_HOLD:
         s->sda_hold_reg = value;
+        break;
     case A_I2C_SDA_SAMPLE:
         s->sda_sample_reg = value;
+        break;
     case A_I2C_HIGH_PERIOD:
         s->high_period_reg = value;
+        break;
     case A_I2C_LOW_PERIOD:
         s->low_period_reg = value;
+        break;
     case A_I2C_START_HOLD:
         s->start_hold_reg = value;
+        break;
     case A_I2C_RSTART_SETUP:
         s->rstart_setup_reg = value;
+        break;
     case A_I2C_STOP_HOLD:
         s->stop_hold_reg = value;
+        break;
     case A_I2C_STOP_SETUP:
         s->stop_setup_reg = value;
+        break;
     default:
         break;
     }

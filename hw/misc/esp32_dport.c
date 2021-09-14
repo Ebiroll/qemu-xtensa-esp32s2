@@ -15,6 +15,7 @@
 #include "hw/sysbus.h"
 #include "hw/irq.h"
 #include "hw/qdev-properties.h"
+#include "hw/qdev-properties-system.h"
 #include "hw/registerfields.h"
 #include "hw/boards.h"
 #include "hw/misc/esp32_reg.h"
@@ -200,6 +201,8 @@ static void esp32_dport_write(void *opaque, hwaddr addr,
         s->cache_state[0].iram0.illegal_access_trap_en = (FIELD_EX32(value, DPORT_CACHE_IA_INT_EN, IA_INT_PRO_IRAM0));
         s->cache_state[1].drom0.illegal_access_trap_en = (FIELD_EX32(value, DPORT_CACHE_IA_INT_EN, IA_INT_APP_DROM0));
         s->cache_state[1].iram0.illegal_access_trap_en = (FIELD_EX32(value, DPORT_CACHE_IA_INT_EN, IA_INT_APP_IRAM0));
+        s->cache_state[0].dram1.illegal_access_trap_en = (FIELD_EX32(value, DPORT_CACHE_IA_INT_EN, IA_INT_PRO_DRAM1));
+        s->cache_state[1].dram1.illegal_access_trap_en = (FIELD_EX32(value, DPORT_CACHE_IA_INT_EN, IA_INT_APP_DRAM1));
         break;
     case PRO_DROM0_MMU_FIRST ... PRO_DROM0_MMU_LAST:
         set_mmu_entry(&s->cache_state[0].drom0, PRO_DROM0_MMU_FIRST, addr, value);
@@ -246,7 +249,7 @@ static void esp32_cache_data_sync(Esp32CacheRegionState* crs)
         }
         mmu_entry &= MMU_ENTRY_MASK;
         if (mmu_entry & ESP32_CACHE_MMU_INVALID_VAL) {
-            uint32_t fill_val = crs->type == ESP32_DCACHE ? 0xbaadbaad : 0x00000000;
+            uint32_t fill_val = crs->illegal_access_retval;
             for (int word = 0; word < ESP32_CACHE_PAGE_SIZE / sizeof(uint32_t); ++word) {
                 cache_page[word] = fill_val;
             }
@@ -280,6 +283,12 @@ static void esp32_cache_state_update(Esp32CacheState* cs)
         esp32_cache_data_sync(&cs->iram0);
     }
     memory_region_set_enabled(&cs->iram0.mem, iram0_enabled);
+
+    if (cs->dport->has_psram) {
+        bool dram1_enabled = cache_enabled &&
+            FIELD_EX32(cs->cache_ctrl1_reg, DPORT_PRO_CACHE_CTRL1, MASK_DRAM1) == 0;
+        memory_region_set_enabled(&cs->dram1.mem, dram1_enabled);
+    }
 }
 
 static void esp32_cache_region_reset(Esp32CacheRegionState *crs)
@@ -325,9 +334,11 @@ static bool esp32_cache_ill_accepts(void *opaque, hwaddr addr,
 void esp32_dport_clear_ill_trap_state(Esp32DportState* s)
 {
     s->cache_state[0].drom0.illegal_access_status = false;
-    s->cache_state[0].drom0.illegal_access_status = false;
+    s->cache_state[1].drom0.illegal_access_status = false;
+    s->cache_state[0].iram0.illegal_access_status = false;
     s->cache_state[1].iram0.illegal_access_status = false;
-    s->cache_state[1].iram0.illegal_access_status = false;
+    s->cache_state[0].dram1.illegal_access_status = false;
+    s->cache_state[1].dram1.illegal_access_status = false;
     qemu_irq_lower(s->cache_ill_irq);
 }
 
@@ -377,9 +388,14 @@ static void esp32_cache_init_region(Esp32CacheState *cs,
     crs->base = base;
     crs->illegal_access_retval = illegal_access_retval;
     snprintf(desc, sizeof(desc), "cpu%d-%s", cs->core_id, name);
-    memory_region_init_rom_device(&crs->mem, OBJECT(cs->dport),
-                                  &esp32_cache_ops, crs,
-                                  desc, ESP32_CACHE_REGION_SIZE, &error_abort);
+    if (type == ESP32_DCACHE_PSRAM) {
+        memory_region_init_ram(&crs->mem, OBJECT(cs->dport), desc,
+                               ESP32_CACHE_REGION_SIZE, &error_abort);
+    } else {
+        memory_region_init_rom_device(&crs->mem, OBJECT(cs->dport),
+                                    &esp32_cache_ops, crs,
+                                    desc, ESP32_CACHE_REGION_SIZE, &error_abort);
+    }
 
     snprintf(desc, sizeof(desc), "cpu%d-%s-ill", cs->core_id, name);
     memory_region_init_io(&crs->illegal_access_trap_mem, OBJECT(cs->dport),
@@ -400,10 +416,12 @@ static void esp32_dport_init(Object *obj)
         Esp32CacheState* cs = &s->cache_state[i];
         cs->core_id = i;
         cs->dport = s;
-        esp32_cache_init_region(cs, &cs->drom0, ESP32_DCACHE, "drom0",
+        esp32_cache_init_region(cs, &cs->drom0, ESP32_DCACHE_FLASH, "drom0",
                                 0x3F400000, 0xbaadbaad);
-        esp32_cache_init_region(cs, &cs->iram0, ESP32_ICACHE, "iram0",
+        esp32_cache_init_region(cs, &cs->iram0, ESP32_ICACHE_FLASH, "iram0",
                                 0x40000000, 0x00000000);
+        esp32_cache_init_region(cs, &cs->dram1, ESP32_DCACHE_PSRAM, "dram1",
+                                0x3F800000, 0xbaadbaad);
     }
 
     qdev_init_gpio_out_named(DEVICE(sbd), &s->appcpu_stall_req, ESP32_DPORT_APPCPU_STALL_GPIO, 1);
@@ -416,6 +434,7 @@ static void esp32_dport_init(Object *obj)
 
 static Property esp32_dport_properties[] = {
     DEFINE_PROP_DRIVE("flash", Esp32DportState, flash_blk),
+    DEFINE_PROP_BOOL("has_psram", Esp32DportState, has_psram, false),
     DEFINE_PROP_END_OF_LIST(),
 };
 

@@ -49,9 +49,8 @@
 #include "hw/pci-host/gpex.h"
 #include "hw/usb/xhci.h"
 
-#include "cpu.h"
 #include "elf.h"
-#include "kvm_i386.h"
+#include "kvm/kvm_i386.h"
 #include "hw/xen/start_info.h"
 
 #define MICROVM_QBOOT_FILENAME "qboot.rom"
@@ -96,11 +95,64 @@ static void microvm_set_rtc(MicrovmMachineState *mms, ISADevice *s)
     rtc_set_memory(s, 0x5d, val >> 16);
 }
 
-static void microvm_gsi_handler(void *opaque, int n, int level)
+static void create_gpex(MicrovmMachineState *mms)
 {
-    GSIState *s = opaque;
+    X86MachineState *x86ms = X86_MACHINE(mms);
+    MemoryRegion *mmio32_alias;
+    MemoryRegion *mmio64_alias;
+    MemoryRegion *mmio_reg;
+    MemoryRegion *ecam_alias;
+    MemoryRegion *ecam_reg;
+    DeviceState *dev;
+    int i;
 
-    qemu_set_irq(s->ioapic_irq[n], level);
+    dev = qdev_new(TYPE_GPEX_HOST);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+
+    /* Map only the first size_ecam bytes of ECAM space */
+    ecam_alias = g_new0(MemoryRegion, 1);
+    ecam_reg = sysbus_mmio_get_region(SYS_BUS_DEVICE(dev), 0);
+    memory_region_init_alias(ecam_alias, OBJECT(dev), "pcie-ecam",
+                             ecam_reg, 0, mms->gpex.ecam.size);
+    memory_region_add_subregion(get_system_memory(),
+                                mms->gpex.ecam.base, ecam_alias);
+
+    /* Map the MMIO window into system address space so as to expose
+     * the section of PCI MMIO space which starts at the same base address
+     * (ie 1:1 mapping for that part of PCI MMIO space visible through
+     * the window).
+     */
+    mmio_reg = sysbus_mmio_get_region(SYS_BUS_DEVICE(dev), 1);
+    if (mms->gpex.mmio32.size) {
+        mmio32_alias = g_new0(MemoryRegion, 1);
+        memory_region_init_alias(mmio32_alias, OBJECT(dev), "pcie-mmio32", mmio_reg,
+                                 mms->gpex.mmio32.base, mms->gpex.mmio32.size);
+        memory_region_add_subregion(get_system_memory(),
+                                    mms->gpex.mmio32.base, mmio32_alias);
+    }
+    if (mms->gpex.mmio64.size) {
+        mmio64_alias = g_new0(MemoryRegion, 1);
+        memory_region_init_alias(mmio64_alias, OBJECT(dev), "pcie-mmio64", mmio_reg,
+                                 mms->gpex.mmio64.base, mms->gpex.mmio64.size);
+        memory_region_add_subregion(get_system_memory(),
+                                    mms->gpex.mmio64.base, mmio64_alias);
+    }
+
+    for (i = 0; i < GPEX_NUM_IRQS; i++) {
+        sysbus_connect_irq(SYS_BUS_DEVICE(dev), i,
+                           x86ms->gsi[mms->gpex.irq + i]);
+    }
+}
+
+static int microvm_ioapics(MicrovmMachineState *mms)
+{
+    if (!x86_machine_is_acpi_enabled(X86_MACHINE(mms))) {
+        return 1;
+    }
+    if (mms->ioapic2 == ON_OFF_AUTO_OFF) {
+        return 1;
+    }
+    return 2;
 }
 
 static void create_gpex(MicrovmMachineState *mms)
@@ -154,32 +206,44 @@ static void create_gpex(MicrovmMachineState *mms)
 
 static void microvm_devices_init(MicrovmMachineState *mms)
 {
+    const char *default_firmware;
     X86MachineState *x86ms = X86_MACHINE(mms);
     ISABus *isa_bus;
     ISADevice *rtc_state;
     GSIState *gsi_state;
+    int ioapics;
     int i;
 
     /* Core components */
-
+    ioapics = microvm_ioapics(mms);
     gsi_state = g_malloc0(sizeof(*gsi_state));
-    if (mms->pic == ON_OFF_AUTO_ON || mms->pic == ON_OFF_AUTO_AUTO) {
-        x86ms->gsi = qemu_allocate_irqs(gsi_handler, gsi_state, GSI_NUM_PINS);
-    } else {
-        x86ms->gsi = qemu_allocate_irqs(microvm_gsi_handler,
-                                        gsi_state, GSI_NUM_PINS);
-    }
+    x86ms->gsi = qemu_allocate_irqs(gsi_handler, gsi_state,
+                                    IOAPIC_NUM_PINS * ioapics);
 
     isa_bus = isa_bus_new(NULL, get_system_memory(), get_system_io(),
                           &error_abort);
     isa_bus_irqs(isa_bus, x86ms->gsi);
 
     ioapic_init_gsi(gsi_state, "machine");
+    if (ioapics > 1) {
+        x86ms->ioapic2 = ioapic_init_secondary(gsi_state);
+    }
 
     kvmclock_create(true);
 
-    mms->virtio_irq_base = x86_machine_is_acpi_enabled(x86ms) ? 16 : 5;
-    for (i = 0; i < VIRTIO_NUM_TRANSPORTS; i++) {
+    mms->virtio_irq_base = 5;
+    mms->virtio_num_transports = 8;
+    if (x86ms->ioapic2) {
+        mms->pcie_irq_base = 16;    /* 16 -> 19 */
+        /* use second ioapic (24 -> 47) for virtio-mmio irq lines */
+        mms->virtio_irq_base = IO_APIC_SECONDARY_IRQBASE;
+        mms->virtio_num_transports = IOAPIC_NUM_PINS;
+    } else if (x86_machine_is_acpi_enabled(x86ms)) {
+        mms->pcie_irq_base = 12;    /* 12 -> 15 */
+        mms->virtio_irq_base = 16;  /* 16 -> 23 */
+    }
+
+    for (i = 0; i < mms->virtio_num_transports; i++) {
         sysbus_create_simple("virtio-mmio",
                              VIRTIO_MMIO_BASE + i * 512,
                              x86ms->gsi[mms->virtio_irq_base + i]);
@@ -221,12 +285,12 @@ static void microvm_devices_init(MicrovmMachineState *mms)
         mms->gpex.mmio32.size = PCIE_MMIO_SIZE;
         mms->gpex.ecam.base   = PCIE_ECAM_BASE;
         mms->gpex.ecam.size   = PCIE_ECAM_SIZE;
-        mms->gpex.irq         = PCIE_IRQ_BASE;
+        mms->gpex.irq         = mms->pcie_irq_base;
         create_gpex(mms);
-        x86ms->pci_irq_mask = ((1 << (PCIE_IRQ_BASE + 0)) |
-                               (1 << (PCIE_IRQ_BASE + 1)) |
-                               (1 << (PCIE_IRQ_BASE + 2)) |
-                               (1 << (PCIE_IRQ_BASE + 3)));
+        x86ms->pci_irq_mask = ((1 << (mms->pcie_irq_base + 0)) |
+                               (1 << (mms->pcie_irq_base + 1)) |
+                               (1 << (mms->pcie_irq_base + 2)) |
+                               (1 << (mms->pcie_irq_base + 3)));
     } else {
         x86ms->pci_irq_mask = 0;
     }
@@ -259,12 +323,10 @@ static void microvm_devices_init(MicrovmMachineState *mms)
         serial_hds_isa_init(isa_bus, 0, 1);
     }
 
-    if (bios_name == NULL) {
-        bios_name = x86_machine_is_acpi_enabled(x86ms)
+    default_firmware = x86_machine_is_acpi_enabled(x86ms)
             ? MICROVM_BIOS_FILENAME
             : MICROVM_QBOOT_FILENAME;
-    }
-    x86_bios_rom_init(get_system_memory(), true);
+    x86_bios_rom_init(MACHINE(mms), default_firmware, get_system_memory(), true);
 }
 
 static void microvm_memory_init(MicrovmMachineState *mms)
@@ -550,6 +612,23 @@ static void microvm_machine_set_pcie(Object *obj, Visitor *v, const char *name,
     visit_type_OnOffAuto(v, name, &mms->pcie, errp);
 }
 
+static void microvm_machine_get_ioapic2(Object *obj, Visitor *v, const char *name,
+                                        void *opaque, Error **errp)
+{
+    MicrovmMachineState *mms = MICROVM_MACHINE(obj);
+    OnOffAuto ioapic2 = mms->ioapic2;
+
+    visit_type_OnOffAuto(v, name, &ioapic2, errp);
+}
+
+static void microvm_machine_set_ioapic2(Object *obj, Visitor *v, const char *name,
+                                        void *opaque, Error **errp)
+{
+    MicrovmMachineState *mms = MICROVM_MACHINE(obj);
+
+    visit_type_OnOffAuto(v, name, &mms->ioapic2, errp);
+}
+
 static bool microvm_machine_get_isa_serial(Object *obj, Error **errp)
 {
     MicrovmMachineState *mms = MICROVM_MACHINE(obj);
@@ -626,6 +705,7 @@ static void microvm_machine_initfn(Object *obj)
     mms->pit = ON_OFF_AUTO_AUTO;
     mms->rtc = ON_OFF_AUTO_AUTO;
     mms->pcie = ON_OFF_AUTO_AUTO;
+    mms->ioapic2 = ON_OFF_AUTO_AUTO;
     mms->isa_serial = true;
     mms->option_roms = true;
     mms->auto_kernel_cmdline = true;
@@ -698,6 +778,13 @@ static void microvm_class_init(ObjectClass *oc, void *data)
                               NULL, NULL);
     object_class_property_set_description(oc, MICROVM_MACHINE_PCIE,
         "Enable PCIe");
+
+    object_class_property_add(oc, MICROVM_MACHINE_IOAPIC2, "OnOffAuto",
+                              microvm_machine_get_ioapic2,
+                              microvm_machine_set_ioapic2,
+                              NULL, NULL);
+    object_class_property_set_description(oc, MICROVM_MACHINE_IOAPIC2,
+        "Enable second IO-APIC");
 
     object_class_property_add_bool(oc, MICROVM_MACHINE_ISA_SERIAL,
                                    microvm_machine_get_isa_serial,

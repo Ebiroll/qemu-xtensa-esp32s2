@@ -11,6 +11,7 @@
 #include "qemu/osdep.h"
 #include "qemu/log.h"
 #include "qemu/error-report.h"
+#include "qemu/units.h"
 #include "qapi/error.h"
 #include "qemu-common.h"
 #include "hw/hw.h"
@@ -24,6 +25,9 @@
 #include "hw/i2c/i2c.h"
 #include "hw/qdev-properties.h"
 #include "hw/xtensa/esp32.h"
+#include "hw/misc/ssi_psram.h"
+#include "hw/sd/dwc_sdmmc.h"
+#include "qemu/datadir.h"
 #include "sysemu/sysemu.h"
 #include "sysemu/reset.h"
 #include "sysemu/cpus.h"
@@ -332,6 +336,7 @@ static void esp32_soc_realize(DeviceState *dev, Error **errp)
     DeviceState* intmatrix_dev = DEVICE(&s->intmatrix);
     memory_region_add_subregion_overlap(dport_mem, ESP32_DPORT_PRO_INTMATRIX_BASE, sysbus_mmio_get_region(SYS_BUS_DEVICE(&s->intmatrix), 0), -1);
 
+    bool init_cache_err = false;
     if (s->dport.flash_blk) {
         for (int i = 0; i < ESP32_CPU_COUNT; ++i) {
             Esp32CacheRegionState *drom0 = &s->dport.cache_state[i].drom0;
@@ -341,6 +346,17 @@ static void esp32_soc_realize(DeviceState *dev, Error **errp)
             memory_region_add_subregion_overlap(&s->cpu_specific_mem[i], iram0->base, &iram0->illegal_access_trap_mem, -2);
             memory_region_add_subregion_overlap(&s->cpu_specific_mem[i], iram0->base, &iram0->mem, -1);
         }
+        init_cache_err = true;
+    }
+    if (s->dport.has_psram) {
+        for (int i = 0; i < ESP32_CPU_COUNT; ++i) {
+            Esp32CacheRegionState *dram1 = &s->dport.cache_state[i].dram1;
+            memory_region_add_subregion_overlap(&s->cpu_specific_mem[i], dram1->base, &dram1->illegal_access_trap_mem, -2);
+            memory_region_add_subregion_overlap(&s->cpu_specific_mem[i], dram1->base, &dram1->mem, -1);
+        }
+        init_cache_err = true;
+    }
+    if (init_cache_err) {
         qdev_connect_gpio_out_named(DEVICE(&s->dport), ESP32_DPORT_CACHE_ILL_IRQ_GPIO, 0,
                                     qdev_get_gpio_in(DEVICE(&s->intmatrix), ETS_CACHE_IA_INTR_SOURCE));
     }
@@ -460,6 +476,11 @@ static void esp32_soc_realize(DeviceState *dev, Error **errp)
     qdev_connect_gpio_out_named(DEVICE(&s->dport), ESP32_DPORT_FLASH_DEC_EN_GPIO, 0,
                                 qdev_get_gpio_in_named(DEVICE(&s->flash_enc), ESP32_FLASH_ENCRYPTION_DEC_EN_GPIO, 0));
 
+    qdev_realize(DEVICE(&s->sdmmc), &s->periph_bus, &error_abort);
+    esp32_soc_add_periph_device(sys_mem, &s->sdmmc, DR_REG_SDMMC_BASE);
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->sdmmc), 0,
+                       qdev_get_gpio_in(intmatrix_dev, ETS_SDIO_HOST_INTR_SOURCE));
+
     esp32_soc_add_unimp_device(sys_mem, "esp32.analog", DR_REG_ANA_BASE, 0x1000);
     esp32_soc_add_unimp_device(sys_mem, "esp32.rtcio", DR_REG_RTCIO_BASE, 0x400);
     esp32_soc_add_unimp_device(sys_mem, "esp32.rtcio", DR_REG_SENS_BASE, 0x400);
@@ -470,6 +491,17 @@ static void esp32_soc_realize(DeviceState *dev, Error **errp)
     esp32_soc_add_unimp_device(sys_mem, "esp32.apbctrl", DR_REG_APB_CTRL_BASE, 0x1000);
     esp32_soc_add_unimp_device(sys_mem, "esp32.i2s0", DR_REG_I2S_BASE, 0x1000);
     esp32_soc_add_unimp_device(sys_mem, "esp32.i2s1", DR_REG_I2S1_BASE, 0x1000);
+
+    /* Emulation of APB_CTRL_DATE_REG, needed for ECO3 revision detection.
+     * This is a small hack to avoid creating a whole new device just to emulate one
+     * register.
+     */
+    const hwaddr apb_ctrl_date_reg = DR_REG_APB_CTRL_BASE + 0x7c;
+    MemoryRegion *apbctrl_mem = g_new(MemoryRegion, 1);
+    memory_region_init_ram(apbctrl_mem, NULL, "esp32.apbctrl_date_reg", 4 /* bytes */, &error_fatal);
+    memory_region_add_subregion(sys_mem, apb_ctrl_date_reg, apbctrl_mem);
+    uint32_t apb_ctrl_date_reg_val = 0x16042000 | 0x80000000;  /* MSB indicates ECO3 silicon revision */
+    cpu_physical_memory_write(apb_ctrl_date_reg, &apb_ctrl_date_reg_val, 4);
 
     qemu_register_reset((QEMUResetHandler*) esp32_soc_reset, dev);
 }
@@ -557,6 +589,8 @@ static void esp32_soc_init(Object *obj)
 
     object_initialize_child(obj, "flash_enc", &s->flash_enc, TYPE_ESP32_FLASH_ENCRYPTION);
 
+    object_initialize_child(obj, "sdmmc", &s->sdmmc, TYPE_DWC_SDMMC);
+
     qdev_init_gpio_in_named(DEVICE(s), esp32_dig_reset, ESP32_RTC_DIG_RESET_GPIO, 1);
     qdev_init_gpio_in_named(DEVICE(s), esp32_cpu_reset, ESP32_RTC_CPU_RESET_GPIO, ESP32_CPU_COUNT);
     qdev_init_gpio_in_named(DEVICE(s), esp32_cpu_stall, ESP32_RTC_CPU_STALL_GPIO, ESP32_CPU_COUNT);
@@ -614,7 +648,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(Esp32MachineState, ESP32_MACHINE)
 
 static void esp32_machine_init_spi_flash(Esp32SocState *ss, BlockBackend* blk)
 {
-    /* "main" flash chip is attached to SPI1 */
+    /* "main" flash chip is attached to SPI1, CS0 */
     DeviceState *spi_master = DEVICE(&ss->spi[1]);
     BusState* spi_bus = qdev_get_child_bus(spi_master, "spi");
     DeviceState *flash_dev = qdev_new("gd25q32");
@@ -622,6 +656,18 @@ static void esp32_machine_init_spi_flash(Esp32SocState *ss, BlockBackend* blk)
     qdev_realize_and_unref(flash_dev, spi_bus, &error_fatal);
     qdev_connect_gpio_out_named(spi_master, SSI_GPIO_CS, 0,
                                 qdev_get_gpio_in_named(flash_dev, SSI_GPIO_CS, 0));
+}
+
+static void esp32_machine_init_psram(Esp32SocState *ss, uint32_t size_mbytes)
+{
+    /* PSRAM attached to SPI1, CS1 */
+    DeviceState *spi_master = DEVICE(&ss->spi[1]);
+    BusState* spi_bus = qdev_get_child_bus(spi_master, "spi");
+    DeviceState *psram = qdev_new(TYPE_SSI_PSRAM);
+    qdev_prop_set_uint32(psram, "size_mbytes", size_mbytes);
+    qdev_realize_and_unref(psram, spi_bus, &error_fatal);
+    qdev_connect_gpio_out_named(spi_master, SSI_GPIO_CS, 1,
+                                qdev_get_gpio_in_named(psram, SSI_GPIO_CS, 0));
 }
 
 static void esp32_machine_init_i2c(Esp32SocState *s)
@@ -636,8 +682,6 @@ static void esp32_machine_init_i2c(Esp32SocState *s)
     DeviceState *i2c_master = DEVICE(&s->i2c[0]);
     I2CBus* i2c_bus = I2C_BUS(qdev_get_child_bus(i2c_master, "i2c"));
     I2CSlave* tmp105 = i2c_slave_create_simple(i2c_bus, "tmp105", 0x48);
-    i2c_slave_create_simple(i2c_bus, "ssd1306", 0x3c);
-
     object_property_set_int(OBJECT(tmp105), "temperature", 25 * 1000, &error_fatal);
 }
 
@@ -663,6 +707,21 @@ static void esp32_machine_init_openeth(Esp32SocState *ss)
     }
 }
 
+static void esp32_machine_init_sd(Esp32SocState *ss)
+{
+    DriveInfo *dinfo = drive_get_next(IF_SD);
+    if (dinfo) {
+        DeviceState *card;
+
+        card = qdev_new(TYPE_SD_CARD);
+        qdev_prop_set_drive_err(card, "drive", blk_by_legacy_dinfo(dinfo),
+                                &error_fatal);
+        /* See the comment on not using sysbus-default in esp32_machine_init_i2c */
+        DeviceState *sdmmc = DEVICE(&ss->sdmmc);
+        SDBus* sd_bus = SD_BUS(qdev_get_child_bus(sdmmc, "sd-bus"));
+        qdev_realize_and_unref(card, BUS(sd_bus), &error_fatal);
+    }
+}
 
 static void esp32_machine_init(MachineState *machine)
 {
@@ -685,6 +744,9 @@ static void esp32_machine_init(MachineState *machine)
     qdev_prop_set_chr(DEVICE(ss), "serial0", serial_hd(0));
     qdev_prop_set_chr(DEVICE(ss), "serial1", serial_hd(1));
     qdev_prop_set_chr(DEVICE(ss), "serial2", serial_hd(2));
+    if (machine->ram_size > 0) {
+        qdev_prop_set_bit(DEVICE(&ss->dport), "has_psram", true);
+    }
 
     qdev_realize(DEVICE(ss), NULL, &error_fatal);
 
@@ -692,9 +754,15 @@ static void esp32_machine_init(MachineState *machine)
         esp32_machine_init_spi_flash(ss, blk);
     }
 
+    if (machine->ram_size > 0) {
+        esp32_machine_init_psram(ss, (uint32_t) (machine->ram_size / MiB));
+    }
+
     esp32_machine_init_i2c(ss);
 
     esp32_machine_init_openeth(ss);
+
+    esp32_machine_init_sd(ss);
 
     /* Need MMU initialized prior to ELF loading,
      * so that ELF gets loaded into virtual addresses
@@ -736,6 +804,22 @@ static void esp32_machine_init(MachineState *machine)
     }
 }
 
+static ram_addr_t esp32_fixup_ram_size(ram_addr_t requested_size)
+{
+    ram_addr_t size;
+    if (requested_size == 0) {
+        size = 0;
+    } else if (requested_size <= 2 * MiB) {
+        size = 2 * MiB;
+    } else if (requested_size <= 4 * MiB ) {
+        size = 4 * MiB;
+    } else {
+        qemu_log("RAM size larger than 4 MB not supported\n");
+        size = 4 * MiB;
+    }
+    return size;
+}
+
 /* Initialize machine type */
 static void esp32_machine_class_init(ObjectClass *oc, void *data)
 {
@@ -744,6 +828,8 @@ static void esp32_machine_class_init(ObjectClass *oc, void *data)
     mc->init = esp32_machine_init;
     mc->max_cpus = 2;
     mc->default_cpus = 2;
+    mc->default_ram_size = 0;
+    mc->fixup_ram_size = esp32_fixup_ram_size;
 }
 
 static const TypeInfo esp32_info = {

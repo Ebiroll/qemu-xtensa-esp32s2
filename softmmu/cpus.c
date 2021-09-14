@@ -41,8 +41,10 @@
 #include "sysemu/replay.h"
 #include "sysemu/runstate.h"
 #include "sysemu/cpu-timers.h"
+#include "sysemu/whpx.h"
 #include "hw/boards.h"
 #include "hw/hw.h"
+#include "trace.h"
 
 #ifdef CONFIG_LINUX
 
@@ -88,7 +90,7 @@ bool cpu_thread_is_idle(CPUState *cpu)
         return true;
     }
     if (!cpu->halted || cpu_has_work(cpu) ||
-        kvm_halt_in_kernel()) {
+        kvm_halt_in_kernel() || whpx_apic_in_platform()) {
         return false;
     }
     return true;
@@ -127,7 +129,7 @@ void hw_error(const char *fmt, ...)
 /*
  * The chosen accelerator is supposed to register this.
  */
-static const CpusAccel *cpus_accel;
+static const AccelOpsClass *cpus_accel;
 
 void cpu_synchronize_all_states(void)
 {
@@ -191,6 +193,11 @@ void cpu_synchronize_pre_loadvm(CPUState *cpu)
     if (cpus_accel->synchronize_pre_loadvm) {
         cpus_accel->synchronize_pre_loadvm(cpu);
     }
+}
+
+bool cpus_are_resettable(void)
+{
+    return cpu_check_are_resettable();
 }
 
 int64_t cpus_get_virtual_clock(void)
@@ -260,6 +267,7 @@ static int do_vm_stop(RunState state, bool send_stop)
 
     bdrv_drain_all();
     ret = bdrv_flush_all();
+    trace_vm_stop_flush_all(ret);
 
     return ret;
 }
@@ -317,7 +325,7 @@ static void sigbus_reraise(void)
         sigaddset(&set, SIGBUS);
         pthread_sigmask(SIG_UNBLOCK, &set, NULL);
     }
-    perror("Failed to re-raise SIGBUS!\n");
+    perror("Failed to re-raise SIGBUS!");
     abort();
 }
 
@@ -593,11 +601,11 @@ void cpu_remove_sync(CPUState *cpu)
     qemu_mutex_lock_iothread();
 }
 
-void cpus_register_accel(const CpusAccel *ca)
+void cpus_register_accel(const AccelOpsClass *ops)
 {
-    assert(ca != NULL);
-    assert(ca->create_vcpu_thread != NULL); /* mandatory */
-    cpus_accel = ca;
+    assert(ops != NULL);
+    assert(ops->create_vcpu_thread != NULL); /* mandatory */
+    cpus_accel = ops;
 }
 
 void qemu_init_vcpu(CPUState *cpu)
@@ -617,7 +625,7 @@ void qemu_init_vcpu(CPUState *cpu)
         cpu_address_space_init(cpu, 0, "cpu-memory", cpu->memory);
     }
 
-    /* accelerators all implement the CpusAccel interface */
+    /* accelerators all implement the AccelOpsClass */
     g_assert(cpus_accel != NULL && cpus_accel->create_vcpu_thread != NULL);
     cpus_accel->create_vcpu_thread(cpu);
 
@@ -698,12 +706,15 @@ int vm_stop_force_state(RunState state)
     if (runstate_is_running()) {
         return vm_stop(state);
     } else {
+        int ret;
         runstate_set(state);
 
         bdrv_drain_all();
         /* Make sure to return an error if the flush in a previous vm_stop()
          * failed. */
-        return bdrv_flush_all();
+        ret = bdrv_flush_all();
+        trace_vm_stop_flush_all(ret);
+        return ret;
     }
 }
 

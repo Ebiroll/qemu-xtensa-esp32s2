@@ -14,6 +14,7 @@ schemas = [
   'alternate-conflict-string.json',
   'alternate-conflict-bool-string.json',
   'alternate-conflict-num-string.json',
+  'alternate-data-invalid.json',
   'alternate-empty.json',
   'alternate-invalid-dict.json',
   'alternate-nested.json',
@@ -30,7 +31,6 @@ schemas = [
   'args-member-array-bad.json',
   'args-member-case.json',
   'args-member-unknown.json',
-  'args-name-clash.json',
   'args-union.json',
   'args-unknown.json',
   'bad-base.json',
@@ -111,7 +111,6 @@ schemas = [
   'flat-union-clash-member.json',
   'flat-union-discriminator-bad-name.json',
   'flat-union-empty.json',
-  'flat-union-inline.json',
   'flat-union-inline-invalid-dict.json',
   'flat-union-int-branch.json',
   'flat-union-invalid-branch-key.json',
@@ -135,9 +134,11 @@ schemas = [
   'indented-expr.json',
   'leading-comma-list.json',
   'leading-comma-object.json',
+  'missing-array-rsqb.json',
   'missing-colon.json',
   'missing-comma-list.json',
   'missing-comma-object.json',
+  'missing-object-member-element.json',
   'missing-type.json',
   'nested-struct-data.json',
   'nested-struct-data-invalid-dict.json',
@@ -145,17 +146,17 @@ schemas = [
   'oob-coroutine.json',
   'oob-test.json',
   'allow-preconfig-test.json',
-  'pragma-doc-required-crap.json',
   'pragma-extra-junk.json',
-  'pragma-name-case-whitelist-crap.json',
   'pragma-non-dict.json',
   'pragma-unknown.json',
-  'pragma-returns-whitelist-crap.json',
+  'pragma-value-not-bool.json',
+  'pragma-value-not-list-of-str.json',
+  'pragma-value-not-list.json',
   'qapi-schema-test.json',
   'quoted-structural-chars.json',
-  'redefined-builtin.json',
   'redefined-command.json',
   'redefined-event.json',
+  'redefined-predefined.json',
   'redefined-type.json',
   'reserved-command-q.json',
   'reserved-enum-q.json',
@@ -167,9 +168,9 @@ schemas = [
   'reserved-type-list.json',
   'returns-alternate.json',
   'returns-array-bad.json',
+  'returns-bad-type.json',
   'returns-dict.json',
   'returns-unknown.json',
-  'returns-whitelist.json',
   'string-code-point-31.json',
   'string-code-point-127.json',
   'struct-base-clash-deep.json',
@@ -178,9 +179,11 @@ schemas = [
   'struct-member-if-invalid.json',
   'struct-member-invalid-dict.json',
   'struct-member-invalid.json',
+  'struct-member-name-clash.json',
   'trailing-comma-list.json',
   'trailing-comma-object.json',
   'type-bypass-bad-gen.json',
+  'type-case.json',
   'unclosed-list.json',
   'unclosed-object.json',
   'unclosed-string.json',
@@ -192,16 +195,22 @@ schemas = [
   'union-clash-branches.json',
   'union-empty.json',
   'union-invalid-base.json',
+  'union-invalid-data.json',
   'union-optional-branch.json',
   'union-unknown.json',
   'unknown-escape.json',
   'unknown-expr-key.json',
 ]
+schemas = files(schemas)
+
+# Intentionally missing schema file test -- not passed through files():
+schemas += [meson.current_source_dir() / 'missing-schema.json']
 
 # Because people may want to use test-qapi.py from the command line, we
 # are not using the "#! /usr/bin/env python3" trick here.  See
-# docs/devel/build-system.txt
-test('QAPI schema regression tests', python, args: files('test-qapi.py', schemas),
+# docs/devel/build-system.rst
+test('QAPI schema regression tests', python,
+     args: files('test-qapi.py') + schemas,
      env: test_env, suite: ['qapi-schema', 'qapi-frontend'])
 
 diff = find_program('diff')

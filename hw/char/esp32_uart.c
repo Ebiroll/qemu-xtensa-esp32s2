@@ -21,11 +21,12 @@
 #include "hw/sysbus.h"
 #include "hw/irq.h"
 #include "hw/qdev-properties.h"
+#include "hw/qdev-properties-system.h"
 #include "hw/char/esp32_uart.h"
 #include "trace.h"
 
 
-static gboolean uart_transmit(GIOChannel *chan, GIOCondition cond, void *opaque);
+static gboolean uart_transmit(void *do_not_use, GIOCondition cond, void *opaque);
 static void uart_receive(void *opaque, const uint8_t *buf, int size);
 static void uart_set_rx_timeout(ESP32UARTState *s);
 
@@ -192,7 +193,7 @@ static void uart_write(void *opaque, hwaddr addr,
 }
 
 
-static gboolean uart_transmit(GIOChannel *chan, GIOCondition cond, void *opaque)
+static gboolean uart_transmit(void *do_not_use, GIOCondition cond, void *opaque)
 {
     ESP32UARTState *s = ESP32_UART(opaque);
 

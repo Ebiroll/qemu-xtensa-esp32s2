@@ -1,5 +1,8 @@
-softmmu_ss.add(files('accel.c'))
+specific_ss.add(files('accel-common.c'))
+softmmu_ss.add(files('accel-softmmu.c'))
+user_ss.add(files('accel-user.c'))
 
+subdir('hvf')
 subdir('qtest')
 subdir('kvm')
 subdir('tcg')

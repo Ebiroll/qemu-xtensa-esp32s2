@@ -411,6 +411,19 @@ static void prep_fetchline(void *opaque)
     *fetchable= 1;
 }
 
+static int do_qemuio_command(const char *cmd)
+{
+    int ret;
+    AioContext *ctx =
+        qemuio_blk ? blk_get_aio_context(qemuio_blk) : qemu_get_aio_context();
+
+    aio_context_acquire(ctx);
+    ret = qemuio_command(qemuio_blk, cmd);
+    aio_context_release(ctx);
+
+    return ret;
+}
+
 static int command_loop(void)
 {
     int i, fetchable = 0, prompted = 0;
@@ -418,7 +431,7 @@ static int command_loop(void)
     char *input;
 
     for (i = 0; !quit_qemu_io && i < ncmdline; i++) {
-        ret = qemuio_command(qemuio_blk, cmdline[i]);
+        ret = do_qemuio_command(cmdline[i]);
         if (ret < 0) {
             last_error = ret;
         }
@@ -446,7 +459,7 @@ static int command_loop(void)
         if (input == NULL) {
             break;
         }
-        ret = qemuio_command(qemuio_blk, input);
+        ret = do_qemuio_command(input);
         g_free(input);
 
         if (ret < 0) {
@@ -476,23 +489,6 @@ enum {
     OPTION_OBJECT = 256,
     OPTION_IMAGE_OPTS = 257,
 };
-
-static QemuOptsList qemu_object_opts = {
-    .name = "object",
-    .implied_opt_name = "qom-type",
-    .head = QTAILQ_HEAD_INITIALIZER(qemu_object_opts.head),
-    .desc = {
-        { }
-    },
-};
-
-static bool qemu_io_object_print_help(const char *type, QemuOpts *opts)
-{
-    if (user_creatable_print_help(type, opts)) {
-        exit(0);
-    }
-    return true;
-}
 
 static QemuOptsList file_opts = {
     .name = "file",
@@ -550,7 +546,6 @@ int main(int argc, char **argv)
     qcrypto_init(&error_fatal);
 
     module_call_init(MODULE_INIT_QOM);
-    qemu_add_opts(&qemu_object_opts);
     qemu_add_opts(&qemu_trace_opts);
     bdrv_init();
 
@@ -612,14 +607,9 @@ int main(int argc, char **argv)
         case 'U':
             force_share = true;
             break;
-        case OPTION_OBJECT: {
-            QemuOpts *qopts;
-            qopts = qemu_opts_parse_noisily(&qemu_object_opts,
-                                            optarg, true);
-            if (!qopts) {
-                exit(1);
-            }
-        }   break;
+        case OPTION_OBJECT:
+            user_creatable_process_cmdline(optarg);
+            break;
         case OPTION_IMAGE_OPTS:
             imageOpts = true;
             break;
@@ -643,10 +633,6 @@ int main(int argc, char **argv)
         error_report_err(local_error);
         exit(1);
     }
-
-    qemu_opts_foreach(&qemu_object_opts,
-                      user_creatable_add_opts_foreach,
-                      qemu_io_object_print_help, &error_fatal);
 
     if (!trace_init_backends()) {
         exit(1);

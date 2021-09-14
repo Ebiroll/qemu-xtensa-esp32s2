@@ -28,7 +28,6 @@
 #include "sysemu/reset.h"
 #include "hw/pci/pci.h"
 #include "hw/pci/pci_host.h"
-#include "exec/address-spaces.h"
 #include "trace.h"
 #include "qom/object.h"
 
@@ -243,7 +242,7 @@ static void ppc4xx_pci_reset(void *opaque)
  * may need further refactoring for other boards. */
 static int ppc4xx_pci_map_irq(PCIDevice *pci_dev, int irq_num)
 {
-    int slot = pci_dev->devfn >> 3;
+    int slot = PCI_SLOT(pci_dev->devfn);
 
     trace_ppc4xx_pci_map_irq(pci_dev->devfn, irq_num, slot);
 

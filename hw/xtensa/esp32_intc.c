@@ -1,5 +1,5 @@
 /*
- * ESP32s2 Interrupt Matrix
+ * ESP32 Interrupt Matrix
  *
  * Copyright (c) 2019 Espressif Systems (Shanghai) Co. Ltd.
  *

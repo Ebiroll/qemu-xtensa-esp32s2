@@ -21,12 +21,9 @@
 #include "qemu/units.h"
 #include "exec/address-spaces.h"
 #include "qapi/error.h"
-#include "cpu.h"
-#include "hw/sysbus.h"
 #include "hw/boards.h"
 #include "hw/qdev-properties.h"
 #include "hw/arm/allwinner-h3.h"
-#include "sysemu/sysemu.h"
 
 static struct arm_boot_info orangepi_binfo = {
     .nb_cpus = AW_H3_NUM_CPUS,
@@ -41,7 +38,7 @@ static void orangepi_init(MachineState *machine)
     DeviceState *carddev;
 
     /* BIOS is not supported by this board */
-    if (bios_name) {
+    if (machine->firmware) {
         error_report("BIOS not supported for this machine");
         exit(1);
     }
@@ -113,7 +110,7 @@ static void orangepi_init(MachineState *machine)
 
 static void orangepi_machine_init(MachineClass *mc)
 {
-    mc->desc = "Orange Pi PC";
+    mc->desc = "Orange Pi PC (Cortex-A7)";
     mc->init = orangepi_init;
     mc->block_default_type = IF_SD;
     mc->units_per_default_bus = 1;

@@ -108,9 +108,9 @@ static QCryptoTLSCreds *nbd_get_tls_creds(const char *id, Error **errp)
         return NULL;
     }
 
-    if (creds->endpoint != QCRYPTO_TLS_CREDS_ENDPOINT_SERVER) {
-        error_setg(errp,
-                   "Expecting TLS credentials with a server endpoint");
+    if (!qcrypto_tls_creds_check_endpoint(creds,
+                                          QCRYPTO_TLS_CREDS_ENDPOINT_SERVER,
+                                          errp)) {
         return NULL;
     }
     object_ref(obj);
@@ -134,7 +134,12 @@ void nbd_server_start(SocketAddress *addr, const char *tls_creds,
     qio_net_listener_set_name(nbd_server->listener,
                               "nbd-listener");
 
-    if (qio_net_listener_open_sync(nbd_server->listener, addr, 1, errp) < 0) {
+    /*
+     * Because this server is persistent, a backlog of SOMAXCONN is
+     * better than trying to size it to max_connections.
+     */
+    if (qio_net_listener_open_sync(nbd_server->listener, addr, SOMAXCONN,
+                                   errp) < 0) {
         goto error;
     }
 

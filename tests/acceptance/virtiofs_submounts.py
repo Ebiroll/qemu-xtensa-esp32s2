@@ -5,13 +5,9 @@ import subprocess
 import time
 
 from avocado import skipUnless
-from avocado_qemu import Test, BUILD_DIR
+from avocado_qemu import LinuxTest, BUILD_DIR
 from avocado_qemu import wait_for_console_pattern
 from avocado.utils import ssh
-
-from qemu.accel import kvm_available
-
-from boot_linux import BootLinux
 
 
 def run_cmd(args):
@@ -71,57 +67,11 @@ def has_cmds(*cmds):
     return (True, '')
 
 
-class VirtiofsSubmountsTest(BootLinux):
+class VirtiofsSubmountsTest(LinuxTest):
     """
     :avocado: tags=arch:x86_64
+    :avocado: tags=accel:kvm
     """
-
-    def get_portfwd(self):
-        port = None
-
-        res = self.vm.command('human-monitor-command',
-                              command_line='info usernet')
-        for line in res.split('\r\n'):
-            match = \
-                re.search(r'TCP.HOST_FORWARD.*127\.0\.0\.1\s*(\d+)\s+10\.',
-                          line)
-            if match is not None:
-                port = match[1]
-                break
-
-        self.assertIsNotNone(port)
-        self.log.debug('sshd listening on port: ' + port)
-        return port
-
-    def ssh_connect(self, username, keyfile):
-        self.ssh_logger = logging.getLogger('ssh')
-        port = self.get_portfwd()
-        self.ssh_session = ssh.Session('127.0.0.1', port=int(port),
-                                       user=username, key=keyfile)
-        for i in range(10):
-            try:
-                self.ssh_session.connect()
-                return
-            except:
-                time.sleep(4)
-                pass
-        self.fail('sshd timeout')
-
-    def ssh_command(self, command):
-        self.ssh_logger.info(command)
-        result = self.ssh_session.cmd(command)
-        stdout_lines = [line.rstrip() for line
-                        in result.stdout_text.splitlines()]
-        for line in stdout_lines:
-            self.ssh_logger.info(line)
-        stderr_lines = [line.rstrip() for line
-                        in result.stderr_text.splitlines()]
-        for line in stderr_lines:
-            self.ssh_logger.warning(line)
-
-        self.assertEqual(result.exit_status, 0,
-                         f'Guest command failed: {command}')
-        return stdout_lines, stderr_lines
 
     def run(self, args, ignore_error=False):
         stdout, stderr, ret = run_cmd(args)
@@ -136,8 +86,7 @@ class VirtiofsSubmountsTest(BootLinux):
         return (stdout, stderr, ret)
 
     def set_up_shared_dir(self):
-        atwd = os.getenv('AVOCADO_TEST_WORKDIR')
-        self.shared_dir = os.path.join(atwd, 'virtiofs-shared')
+        self.shared_dir = os.path.join(self.workdir, 'virtiofs-shared')
 
         os.mkdir(self.shared_dir)
 
@@ -185,10 +134,6 @@ class VirtiofsSubmountsTest(BootLinux):
                          '-numa',
                          'node,memdev=mem')
 
-    def launch_vm(self):
-        self.launch_and_wait()
-        self.ssh_connect('root', self.ssh_key)
-
     def set_up_nested_mounts(self):
         scratch_dir = os.path.join(self.shared_dir, 'scratch')
         try:
@@ -228,31 +173,37 @@ class VirtiofsSubmountsTest(BootLinux):
     def setUp(self):
         vmlinuz = self.params.get('vmlinuz')
         if vmlinuz is None:
+            """
+            The Linux kernel supports FUSE auto-submounts only as of 5.10.
+            boot_linux.py currently provides Fedora 31, whose kernel is too
+            old, so this test cannot pass with the on-image kernel (you are
+            welcome to try, hence the option to force such a test with
+            -p vmlinuz='').  Therefore, for now the user must provide a
+            sufficiently new custom kernel, or effectively explicitly
+            request failure with -p vmlinuz=''.
+            Once an image with a sufficiently new kernel is available
+            (probably Fedora 34), we can make -p vmlinuz='' the default, so
+            that this parameter no longer needs to be specified.
+            """
             self.cancel('vmlinuz parameter not set; you must point it to a '
                         'Linux kernel binary to test (to run this test with ' \
                         'the on-image kernel, set it to an empty string)')
 
         self.seed = self.params.get('seed')
 
-        atwd = os.getenv('AVOCADO_TEST_WORKDIR')
-        self.ssh_key = os.path.join(atwd, 'id_ed25519')
+        self.ssh_key = os.path.join(self.workdir, 'id_ed25519')
 
-        self.run(('ssh-keygen', '-t', 'ed25519', '-f', self.ssh_key))
+        self.run(('ssh-keygen', '-N', '', '-t', 'ed25519', '-f', self.ssh_key))
 
-        pubkey = open(self.ssh_key + '.pub').read()
+        pubkey = self.ssh_key + '.pub'
 
         super(VirtiofsSubmountsTest, self).setUp(pubkey)
 
-        if len(vmlinuz) > 0:
+        if vmlinuz:
             self.vm.add_args('-kernel', vmlinuz,
                              '-append', 'console=ttyS0 root=/dev/sda1')
 
-        # Allow us to connect to SSH
-        self.vm.add_args('-netdev', 'user,id=vnet,hostfwd=:127.0.0.1:0-:22',
-                         '-device', 'e1000,netdev=vnet')
-
-        if not kvm_available(self.arch, self.qemu_bin):
-            self.cancel(KVM_NOT_AVAILABLE)
+        self.require_accelerator("kvm")
         self.vm.add_args('-accel', 'kvm')
 
     def tearDown(self):
@@ -271,7 +222,7 @@ class VirtiofsSubmountsTest(BootLinux):
         self.set_up_nested_mounts()
 
         self.set_up_virtiofs()
-        self.launch_vm()
+        self.launch_and_wait()
         self.mount_in_guest()
         self.check_in_guest()
 
@@ -281,14 +232,14 @@ class VirtiofsSubmountsTest(BootLinux):
 
         self.set_up_nested_mounts()
 
-        self.launch_vm()
+        self.launch_and_wait()
         self.mount_in_guest()
         self.check_in_guest()
 
     def test_post_launch_set_up(self):
         self.set_up_shared_dir()
         self.set_up_virtiofs()
-        self.launch_vm()
+        self.launch_and_wait()
 
         self.set_up_nested_mounts()
 
@@ -298,7 +249,7 @@ class VirtiofsSubmountsTest(BootLinux):
     def test_post_mount_set_up(self):
         self.set_up_shared_dir()
         self.set_up_virtiofs()
-        self.launch_vm()
+        self.launch_and_wait()
         self.mount_in_guest()
 
         self.set_up_nested_mounts()
@@ -311,7 +262,7 @@ class VirtiofsSubmountsTest(BootLinux):
         self.set_up_nested_mounts()
 
         self.set_up_virtiofs()
-        self.launch_vm()
+        self.launch_and_wait()
         self.mount_in_guest()
         self.check_in_guest()
 

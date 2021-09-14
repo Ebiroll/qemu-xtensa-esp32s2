@@ -28,7 +28,6 @@
 #include "qemu/error-report.h"
 #include "qemu/queue.h"
 #include "hw/qdev-properties.h"
-#include "hw/sysbus.h"
 #include "trace.h"
 #include "hw/virtio/virtio-serial.h"
 #include "hw/virtio/virtio-access.h"
@@ -741,7 +740,6 @@ static void virtio_serial_post_load_timer_cb(void *opaque)
         }
     }
     g_free(s->post_load->connected);
-    timer_del(s->post_load->timer);
     timer_free(s->post_load->timer);
     g_free(s->post_load);
     s->post_load = NULL;
@@ -1138,7 +1136,6 @@ static void virtio_serial_device_unrealize(DeviceState *dev)
     g_free(vser->ports_map);
     if (vser->post_load) {
         g_free(vser->post_load->connected);
-        timer_del(vser->post_load->timer);
         timer_free(vser->post_load->timer);
         g_free(vser->post_load);
     }

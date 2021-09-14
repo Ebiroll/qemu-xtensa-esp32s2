@@ -19,6 +19,7 @@
 #include "hw/sysbus.h"
 #include "hw/irq.h"
 #include "hw/qdev-properties.h"
+#include "hw/qdev-properties-system.h"
 #include "hw/nvram/esp32_efuse.h"
 
 static void esp32_efuse_read_op(Esp32EfuseState *s);
@@ -154,15 +155,9 @@ static void esp32_efuse_read_op(Esp32EfuseState *s)
 {
     s->cmd_reg = EFUSE_READ;
     if (s->blk != NULL) {
-        uint64_t perm = BLK_PERM_CONSISTENT_READ |
-                                (blk_is_read_only(s->blk) ? 0 : BLK_PERM_WRITE);
-        int ret = blk_set_perm(s->blk, perm, BLK_PERM_ALL, NULL);
-        if (ret != 0) {
-            fprintf(stderr, "%s: failed to set permission (%d)\n", __func__, ret);
-        }
-        ret = blk_pread(s->blk, 0, &s->efuse_rd, sizeof(s->efuse_rd));
+        int ret = blk_pread(s->blk, 0, &s->efuse_rd, sizeof(s->efuse_rd));
         if (ret != sizeof(s->efuse_rd)) {
-            fprintf(stderr, "%s: failed to read the block device (%d)\n", __func__, ret);
+            error_report("%s: failed to read the block device (%d)", __func__, ret);
         }
     }
 
@@ -205,7 +200,7 @@ static void esp32_efuse_program_op(Esp32EfuseState *s)
     if (s->blk != NULL) {
         int ret = blk_pwrite(s->blk, 0, &result, sizeof(result), 0);
         if (ret != sizeof(result)) {
-            fprintf(stderr, "%s: failed to write to block device (%d)\n", __func__, ret);
+            error_report("%s: failed to write to block device (%d)", __func__, ret);
         }
     }
 
@@ -249,6 +244,19 @@ static void esp32_efuse_reset(DeviceState *dev)
 
 static void esp32_efuse_realize(DeviceState *dev, Error **errp)
 {
+    Esp32EfuseState *s = ESP32_EFUSE(dev);
+    if (s->blk != NULL) {
+        if (!blk_supports_write_perm(s->blk)) {
+            error_setg(errp, "%s: block device is not writeable", __func__);
+            return;
+        }
+        uint64_t perm = BLK_PERM_CONSISTENT_READ | BLK_PERM_WRITE;
+        int ret = blk_set_perm(s->blk, perm, BLK_PERM_ALL, NULL);
+        if (ret != 0) {
+            error_setg(errp, "%s: failed to set permission (%d)", __func__, ret);
+            return;
+        }
+    }
 }
 
 static void esp32_efuse_init(Object *obj)

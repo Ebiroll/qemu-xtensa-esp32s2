@@ -21,8 +21,9 @@ typedef struct Esp32CacheState Esp32CacheState;
 #define ESP32_CACHE_MAX_PHYS_PAGES      0x100
 
 typedef enum Esp32CacheRegionType {
-    ESP32_DCACHE,
-    ESP32_ICACHE,
+    ESP32_DCACHE_FLASH,
+    ESP32_ICACHE_FLASH,
+    ESP32_DCACHE_PSRAM,
 } Esp32CacheRegionType;
 
 typedef struct Esp32CacheRegionState {
@@ -48,12 +49,14 @@ typedef struct Esp32CacheState {
      */
     Esp32CacheRegionState iram0;
     Esp32CacheRegionState drom0;
+    Esp32CacheRegionState dram1;  /* PSRAM */
 } Esp32CacheState;
 
 typedef struct Esp32DportState {
     SysBusDevice parent_obj;
 
     MemoryRegion iomem;
+    bool has_psram;
     int cpu_count;
     Esp32CacheState cache_state[ESP32_CPU_COUNT];
     BlockBackend *flash_blk;

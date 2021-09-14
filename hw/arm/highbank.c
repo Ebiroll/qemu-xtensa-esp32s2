@@ -19,17 +19,16 @@
 
 #include "qemu/osdep.h"
 #include "qemu-common.h"
+#include "qemu/datadir.h"
 #include "qapi/error.h"
 #include "hw/sysbus.h"
 #include "migration/vmstate.h"
 #include "hw/arm/boot.h"
 #include "hw/loader.h"
 #include "net/net.h"
-#include "sysemu/kvm.h"
 #include "sysemu/runstate.h"
 #include "sysemu/sysemu.h"
 #include "hw/boards.h"
-#include "exec/address-spaces.h"
 #include "qemu/error-report.h"
 #include "hw/char/pl011.h"
 #include "hw/ide/ahci.h"
@@ -37,6 +36,7 @@
 #include "hw/cpu/a15mpcore.h"
 #include "qemu/log.h"
 #include "qom/object.h"
+#include "cpu.h"
 
 #define SMP_BOOT_ADDR           0x100
 #define SMP_BOOT_REG            0x40
@@ -169,7 +169,7 @@ struct HighbankRegsState {
     uint32_t regs[NUM_REGS];
 };
 
-static VMStateDescription vmstate_highbank_regs = {
+static const VMStateDescription vmstate_highbank_regs = {
     .name = "highbank-regs",
     .version_id = 0,
     .minimum_version_id = 0,
@@ -297,16 +297,16 @@ static void calxeda_init(MachineState *machine, enum cxmachines machine_id)
     memory_region_init_ram(sysram, NULL, "highbank.sysram", 0x8000,
                            &error_fatal);
     memory_region_add_subregion(sysmem, 0xfff88000, sysram);
-    if (bios_name != NULL) {
-        sysboot_filename = qemu_find_file(QEMU_FILE_TYPE_BIOS, bios_name);
+    if (machine->firmware != NULL) {
+        sysboot_filename = qemu_find_file(QEMU_FILE_TYPE_BIOS, machine->firmware);
         if (sysboot_filename != NULL) {
             if (load_image_targphys(sysboot_filename, 0xfff88000, 0x8000) < 0) {
-                error_report("Unable to load %s", bios_name);
+                error_report("Unable to load %s", machine->firmware);
                 exit(1);
             }
             g_free(sysboot_filename);
         } else {
-            error_report("Unable to find %s", bios_name);
+            error_report("Unable to find %s", machine->firmware);
             exit(1);
         }
     }
@@ -395,15 +395,9 @@ static void calxeda_init(MachineState *machine, enum cxmachines machine_id)
     highbank_binfo.loader_start = 0;
     highbank_binfo.write_secondary_boot = hb_write_secondary;
     highbank_binfo.secondary_cpu_reset_hook = hb_reset_secondary;
-    if (!kvm_enabled()) {
-        highbank_binfo.board_setup_addr = BOARD_SETUP_ADDR;
-        highbank_binfo.write_board_setup = hb_write_board_setup;
-        highbank_binfo.secure_board_setup = true;
-    } else {
-        warn_report("cannot load built-in Monitor support "
-                    "if KVM is enabled. Some guests (such as Linux) "
-                    "may not boot.");
-    }
+    highbank_binfo.board_setup_addr = BOARD_SETUP_ADDR;
+    highbank_binfo.write_board_setup = hb_write_board_setup;
+    highbank_binfo.secure_board_setup = true;
 
     arm_load_kernel(ARM_CPU(first_cpu), machine, &highbank_binfo);
 }

@@ -19,8 +19,8 @@ config XTENSA_ESP32
     select SSI_M25P80
     select UNIMP
     select OPENCORES_ETH
+    select DWC_SDMMC
     select TMP105
-    select SSD1306 # OLED display
 
 
 config XTENSA_ESP32S2

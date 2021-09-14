@@ -20,6 +20,7 @@
 #include "hw/nvram/esp32_efuse.h"
 #include "hw/xtensa/esp32_intc.h"
 #include "hw/misc/esp32_flash_enc.h"
+#include "hw/sd/dwc_sdmmc.h"
 
 typedef struct Esp32SocState {
     /*< private >*/
@@ -42,6 +43,7 @@ typedef struct Esp32SocState {
     Esp32RsaState rsa;
     Esp32EfuseState efuse;
     Esp32FlashEncryptionState flash_enc;
+    DWCSDMMCState sdmmc;
     DeviceState *eth;
 
     BusState rtc_bus;

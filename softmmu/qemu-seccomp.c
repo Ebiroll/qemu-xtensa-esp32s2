@@ -45,8 +45,8 @@ const struct scmp_arg_cmp sched_setscheduler_arg[] = {
     { .arg = 1, .op = SCMP_CMP_NE, .datum_a = SCHED_IDLE }
 };
 
-static const struct QemuSeccompSyscall blacklist[] = {
-    /* default set of syscalls to blacklist */
+static const struct QemuSeccompSyscall denylist[] = {
+    /* default set of syscalls that should get blocked */
     { SCMP_SYS(reboot),                 QEMU_SECCOMP_SET_DEFAULT },
     { SCMP_SYS(swapon),                 QEMU_SECCOMP_SET_DEFAULT },
     { SCMP_SYS(swapoff),                QEMU_SECCOMP_SET_DEFAULT },
@@ -97,17 +97,11 @@ static const struct QemuSeccompSyscall blacklist[] = {
     { SCMP_SYS(vfork),                  QEMU_SECCOMP_SET_SPAWN },
     { SCMP_SYS(execve),                 QEMU_SECCOMP_SET_SPAWN },
     /* resource control */
-    { SCMP_SYS(getpriority),            QEMU_SECCOMP_SET_RESOURCECTL },
     { SCMP_SYS(setpriority),            QEMU_SECCOMP_SET_RESOURCECTL },
     { SCMP_SYS(sched_setparam),         QEMU_SECCOMP_SET_RESOURCECTL },
-    { SCMP_SYS(sched_getparam),         QEMU_SECCOMP_SET_RESOURCECTL },
     { SCMP_SYS(sched_setscheduler),     QEMU_SECCOMP_SET_RESOURCECTL,
       ARRAY_SIZE(sched_setscheduler_arg), sched_setscheduler_arg },
-    { SCMP_SYS(sched_getscheduler),     QEMU_SECCOMP_SET_RESOURCECTL },
     { SCMP_SYS(sched_setaffinity),      QEMU_SECCOMP_SET_RESOURCECTL },
-    { SCMP_SYS(sched_getaffinity),      QEMU_SECCOMP_SET_RESOURCECTL },
-    { SCMP_SYS(sched_get_priority_max), QEMU_SECCOMP_SET_RESOURCECTL },
-    { SCMP_SYS(sched_get_priority_min), QEMU_SECCOMP_SET_RESOURCECTL },
 };
 
 static inline __attribute__((unused)) int
@@ -175,18 +169,18 @@ static int seccomp_start(uint32_t seccomp_opts, Error **errp)
         goto seccomp_return;
     }
 
-    for (i = 0; i < ARRAY_SIZE(blacklist); i++) {
+    for (i = 0; i < ARRAY_SIZE(denylist); i++) {
         uint32_t action;
-        if (!(seccomp_opts & blacklist[i].set)) {
+        if (!(seccomp_opts & denylist[i].set)) {
             continue;
         }
 
-        action = qemu_seccomp_get_action(blacklist[i].set);
-        rc = seccomp_rule_add_array(ctx, action, blacklist[i].num,
-                                    blacklist[i].narg, blacklist[i].arg_cmp);
+        action = qemu_seccomp_get_action(denylist[i].set);
+        rc = seccomp_rule_add_array(ctx, action, denylist[i].num,
+                                    denylist[i].narg, denylist[i].arg_cmp);
         if (rc < 0) {
             error_setg_errno(errp, -rc,
-                             "failed to add seccomp blacklist rules");
+                             "failed to add seccomp denylist rules");
             goto seccomp_return;
         }
     }
@@ -202,7 +196,6 @@ static int seccomp_start(uint32_t seccomp_opts, Error **errp)
     return rc < 0 ? -1 : 0;
 }
 
-#ifdef CONFIG_SECCOMP
 int parse_sandbox(void *opaque, QemuOpts *opts, Error **errp)
 {
     if (qemu_opt_get_bool(opts, "enable", false)) {
@@ -328,4 +321,3 @@ static void seccomp_register(void)
     }
 }
 opts_init(seccomp_register);
-#endif

@@ -30,15 +30,29 @@
 #include "qemu/option.h"
 #include "hw/ppc/fdt.h"
 #include "qemu/range.h"
-#include "sysemu/sysemu.h"
 #include "hw/ppc/spapr_numa.h"
+
+/* DIMM health bitmap bitmap indicators. Taken from kernel's papr_scm.c */
+/* SCM device is unable to persist memory contents */
+#define PAPR_PMEM_UNARMED PPC_BIT(0)
+
+/*
+ * The nvdimm size should be aligned to SCM block size.
+ * The SCM block size should be aligned to SPAPR_MEMORY_BLOCK_SIZE
+ * in order to have SCM regions not to overlap with dimm memory regions.
+ * The SCM devices can have variable block sizes. For now, fixing the
+ * block size to the minimum value.
+ */
+#define SPAPR_MINIMUM_SCM_BLOCK_SIZE SPAPR_MEMORY_BLOCK_SIZE
+
+/* Have an explicit check for alignment */
+QEMU_BUILD_BUG_ON(SPAPR_MINIMUM_SCM_BLOCK_SIZE % SPAPR_MEMORY_BLOCK_SIZE);
 
 bool spapr_nvdimm_validate(HotplugHandler *hotplug_dev, NVDIMMDevice *nvdimm,
                            uint64_t size, Error **errp)
 {
     const MachineClass *mc = MACHINE_GET_CLASS(hotplug_dev);
     const MachineState *ms = MACHINE(hotplug_dev);
-    const char *nvdimm_opt = qemu_opt_get(qemu_get_machine_opts(), "nvdimm");
     g_autofree char *uuidstr = NULL;
     QemuUUID uuid;
     int ret;
@@ -48,16 +62,7 @@ bool spapr_nvdimm_validate(HotplugHandler *hotplug_dev, NVDIMMDevice *nvdimm,
         return false;
     }
 
-    /*
-     * NVDIMM support went live in 5.1 without considering that, in
-     * other archs, the user needs to enable NVDIMM support with the
-     * 'nvdimm' machine option and the default behavior is NVDIMM
-     * support disabled. It is too late to roll back to the standard
-     * behavior without breaking 5.1 guests. What we can do is to
-     * ensure that, if the user sets nvdimm=off, we error out
-     * regardless of being 5.1 or newer.
-     */
-    if (!ms->nvdimms_state->is_enabled && nvdimm_opt) {
+    if (!ms->nvdimms_state->is_enabled) {
         error_setg(errp, "nvdimm device found but 'nvdimm=off' was set");
         return false;
     }
@@ -89,7 +94,7 @@ bool spapr_nvdimm_validate(HotplugHandler *hotplug_dev, NVDIMMDevice *nvdimm,
 }
 
 
-bool spapr_add_nvdimm(DeviceState *dev, uint64_t slot, Error **errp)
+void spapr_add_nvdimm(DeviceState *dev, uint64_t slot)
 {
     SpaprDrc *drc;
     bool hotplugged = spapr_drc_hotplugged(dev);
@@ -97,9 +102,11 @@ bool spapr_add_nvdimm(DeviceState *dev, uint64_t slot, Error **errp)
     drc = spapr_drc_by_id(TYPE_SPAPR_DRC_PMEM, slot);
     g_assert(drc);
 
-    if (!spapr_drc_attach(drc, dev, errp)) {
-        return false;
-    }
+    /*
+     * pc_dimm_get_free_slot() provided a free slot at pre-plug. The
+     * corresponding DRC is thus assumed to be attachable.
+     */
+    spapr_drc_attach(drc, dev);
 
     if (hotplugged) {
         spapr_hotplug_req_add_by_index(drc);
@@ -170,11 +177,11 @@ int spapr_pmem_dt_populate(SpaprDrc *drc, SpaprMachineState *spapr,
 
 void spapr_dt_persistent_memory(SpaprMachineState *spapr, void *fdt)
 {
-    int offset = fdt_subnode_offset(fdt, 0, "persistent-memory");
+    int offset = fdt_subnode_offset(fdt, 0, "ibm,persistent-memory");
     GSList *iter, *nvdimms = nvdimm_get_device_list();
 
     if (offset < 0) {
-        offset = fdt_add_subnode(fdt, 0, "persistent-memory");
+        offset = fdt_add_subnode(fdt, 0, "ibm,persistent-memory");
         _FDT(offset);
         _FDT((fdt_setprop_cell(fdt, offset, "#address-cells", 0x1)));
         _FDT((fdt_setprop_cell(fdt, offset, "#size-cells", 0x0)));
@@ -478,6 +485,37 @@ static target_ulong h_scm_unbind_all(PowerPCCPU *cpu, SpaprMachineState *spapr,
     return H_SUCCESS;
 }
 
+static target_ulong h_scm_health(PowerPCCPU *cpu, SpaprMachineState *spapr,
+                                 target_ulong opcode, target_ulong *args)
+{
+
+    NVDIMMDevice *nvdimm;
+    uint64_t hbitmap = 0;
+    uint32_t drc_index = args[0];
+    SpaprDrc *drc = spapr_drc_by_index(drc_index);
+    const uint64_t hbitmap_mask = PAPR_PMEM_UNARMED;
+
+
+    /* Ensure that the drc is valid & is valid PMEM dimm and is plugged in */
+    if (!drc || !drc->dev ||
+        spapr_drc_type(drc) != SPAPR_DR_CONNECTOR_TYPE_PMEM) {
+        return H_PARAMETER;
+    }
+
+    nvdimm = NVDIMM(drc->dev);
+
+    /* Update if the nvdimm is unarmed and send its status via health bitmaps */
+    if (object_property_get_bool(OBJECT(nvdimm), NVDIMM_UNARMED_PROP, NULL)) {
+        hbitmap |= PAPR_PMEM_UNARMED;
+    }
+
+    /* Update the out args with health bitmap/mask */
+    args[0] = hbitmap;
+    args[1] = hbitmap_mask;
+
+    return H_SUCCESS;
+}
+
 static void spapr_scm_register_types(void)
 {
     /* qemu/scm specific hcalls */
@@ -486,6 +524,7 @@ static void spapr_scm_register_types(void)
     spapr_register_hypercall(H_SCM_BIND_MEM, h_scm_bind_mem);
     spapr_register_hypercall(H_SCM_UNBIND_MEM, h_scm_unbind_mem);
     spapr_register_hypercall(H_SCM_UNBIND_ALL, h_scm_unbind_all);
+    spapr_register_hypercall(H_SCM_HEALTH, h_scm_health);
 }
 
 type_init(spapr_scm_register_types)

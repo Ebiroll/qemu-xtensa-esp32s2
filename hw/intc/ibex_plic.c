@@ -43,16 +43,23 @@ static void ibex_plic_irqs_set_pending(IbexPlicState *s, int irq, bool level)
 {
     int pending_num = irq / 32;
 
+    if (!level) {
+        /*
+         * If the level is low make sure we clear the hidden_pending.
+         */
+        s->hidden_pending[pending_num] &= ~(1 << (irq % 32));
+    }
+
     if (s->claimed[pending_num] & 1 << (irq % 32)) {
         /*
          * The interrupt has been claimed, but not completed.
          * The pending bit can't be set.
+         * Save the pending level for after the interrupt is completed.
          */
         s->hidden_pending[pending_num] |= level << (irq % 32);
-        return;
+    } else {
+        s->pending[pending_num] |= level << (irq % 32);
     }
-
-    s->pending[pending_num] |= level << (irq % 32);
 }
 
 static bool ibex_plic_irqs_pending(IbexPlicState *s, uint32_t context)
@@ -218,23 +225,23 @@ static void ibex_plic_irq_request(void *opaque, int irq, int level)
 
 static Property ibex_plic_properties[] = {
     DEFINE_PROP_UINT32("num-cpus", IbexPlicState, num_cpus, 1),
-    DEFINE_PROP_UINT32("num-sources", IbexPlicState, num_sources, 80),
+    DEFINE_PROP_UINT32("num-sources", IbexPlicState, num_sources, 176),
 
     DEFINE_PROP_UINT32("pending-base", IbexPlicState, pending_base, 0),
-    DEFINE_PROP_UINT32("pending-num", IbexPlicState, pending_num, 3),
+    DEFINE_PROP_UINT32("pending-num", IbexPlicState, pending_num, 6),
 
-    DEFINE_PROP_UINT32("source-base", IbexPlicState, source_base, 0x0c),
-    DEFINE_PROP_UINT32("source-num", IbexPlicState, source_num, 3),
+    DEFINE_PROP_UINT32("source-base", IbexPlicState, source_base, 0x18),
+    DEFINE_PROP_UINT32("source-num", IbexPlicState, source_num, 6),
 
-    DEFINE_PROP_UINT32("priority-base", IbexPlicState, priority_base, 0x18),
-    DEFINE_PROP_UINT32("priority-num", IbexPlicState, priority_num, 80),
+    DEFINE_PROP_UINT32("priority-base", IbexPlicState, priority_base, 0x30),
+    DEFINE_PROP_UINT32("priority-num", IbexPlicState, priority_num, 177),
 
-    DEFINE_PROP_UINT32("enable-base", IbexPlicState, enable_base, 0x200),
-    DEFINE_PROP_UINT32("enable-num", IbexPlicState, enable_num, 3),
+    DEFINE_PROP_UINT32("enable-base", IbexPlicState, enable_base, 0x300),
+    DEFINE_PROP_UINT32("enable-num", IbexPlicState, enable_num, 6),
 
-    DEFINE_PROP_UINT32("threshold-base", IbexPlicState, threshold_base, 0x20c),
+    DEFINE_PROP_UINT32("threshold-base", IbexPlicState, threshold_base, 0x318),
 
-    DEFINE_PROP_UINT32("claim-base", IbexPlicState, claim_base, 0x210),
+    DEFINE_PROP_UINT32("claim-base", IbexPlicState, claim_base, 0x31c),
     DEFINE_PROP_END_OF_LIST(),
 };
 

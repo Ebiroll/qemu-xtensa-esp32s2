@@ -183,7 +183,16 @@ static void xtensa_core_class_init(ObjectClass *oc, void *data)
      * for that: reset bit 0 in the 'flags' field of the registers definitions
      * in the gdb/xtensa-config.c inside gdb source tree or inside gdb overlay.
      */
-    cc->gdb_num_core_regs = config->gdb_regmap.num_core_regs;
+    cc->gdb_num_core_regs = config->gdb_regmap.num_regs;
+
+    /* Espressif local: allow changing the behavior here using
+     * QEMU_XTENSA_CORE_REGS_ONLY environment variable, to support different
+     * GDB builds
+     */
+    const char* core_regs_only = getenv("QEMU_XTENSA_CORE_REGS_ONLY");
+    if (core_regs_only != NULL && strcmp(core_regs_only, "0") != 0) {
+        cc->gdb_num_core_regs = config->gdb_regmap.num_core_regs;
+    }
 }
 
 void xtensa_register_core(XtensaConfigList *node)
@@ -261,7 +270,7 @@ bool xtensa_cpu_tlb_fill(CPUState *cs, vaddr address, int size,
     cpu_loop_exit_restore(cs, retaddr);
 }
 
-#else
+#else /* !CONFIG_USER_ONLY */
 
 void xtensa_cpu_do_unaligned_access(CPUState *cs,
                                     vaddr addr, MMUAccessType access_type,
@@ -270,13 +279,12 @@ void xtensa_cpu_do_unaligned_access(CPUState *cs,
     XtensaCPU *cpu = XTENSA_CPU(cs);
     CPUXtensaState *env = &cpu->env;
 
-    if (xtensa_option_enabled(env->config, XTENSA_OPTION_UNALIGNED_EXCEPTION) &&
-        !xtensa_option_enabled(env->config, XTENSA_OPTION_HW_ALIGNMENT)) {
-        cpu_restore_state(CPU(cpu), retaddr, true);
-        HELPER(exception_cause_vaddr)(env,
-                                      env->pc, LOAD_STORE_ALIGNMENT_CAUSE,
-                                      addr);
-    }
+    assert(xtensa_option_enabled(env->config,
+                                 XTENSA_OPTION_UNALIGNED_EXCEPTION));
+    cpu_restore_state(CPU(cpu), retaddr, true);
+    HELPER(exception_cause_vaddr)(env,
+                                  env->pc, LOAD_STORE_ALIGNMENT_CAUSE,
+                                  addr);
 }
 
 bool xtensa_cpu_tlb_fill(CPUState *cs, vaddr address, int size,
@@ -337,4 +345,4 @@ void xtensa_runstall(CPUXtensaState *env, bool runstall)
         qemu_cpu_kick(cpu);
     }
 }
-#endif
+#endif /* !CONFIG_USER_ONLY */

@@ -39,6 +39,7 @@
 #include "qemu/thread.h"
 #include <libgen.h>
 #include "qemu/cutils.h"
+#include "qemu/compiler.h"
 
 #ifdef CONFIG_LINUX
 #include <sys/syscall.h>
@@ -200,6 +201,8 @@ void *qemu_try_memalign(size_t alignment, size_t size)
 
     if (alignment < sizeof(void*)) {
         alignment = sizeof(void*);
+    } else {
+        g_assert(is_power_of_2(alignment));
     }
 
 #if defined(CONFIG_POSIX_MEMALIGN)
@@ -224,10 +227,13 @@ void *qemu_memalign(size_t alignment, size_t size)
 }
 
 /* alloc shared memory pages */
-void *qemu_anon_ram_alloc(size_t size, uint64_t *alignment, bool shared)
+void *qemu_anon_ram_alloc(size_t size, uint64_t *alignment, bool shared,
+                          bool noreserve)
 {
+    const uint32_t qemu_map_flags = (shared ? QEMU_MAP_SHARED : 0) |
+                                    (noreserve ? QEMU_MAP_NORESERVE : 0);
     size_t align = QEMU_VMALLOC_ALIGN;
-    void *ptr = qemu_ram_mmap(-1, size, align, shared, false);
+    void *ptr = qemu_ram_mmap(-1, size, align, qemu_map_flags, 0);
 
     if (ptr == MAP_FAILED) {
         return NULL;
@@ -270,17 +276,6 @@ int qemu_try_set_nonblock(int fd)
         return -errno;
     }
     if (fcntl(fd, F_SETFL, f | O_NONBLOCK) == -1) {
-#ifdef __OpenBSD__
-        /*
-         * Previous to OpenBSD 6.3, fcntl(F_SETFL) is not permitted on
-         * memory devices and sets errno to ENODEV.
-         * It's OK if we fail to set O_NONBLOCK on devices like /dev/null,
-         * because they will never block anyway.
-         */
-        if (errno == ENODEV) {
-            return 0;
-        }
-#endif
         return -errno;
     }
     return 0;
@@ -773,6 +768,16 @@ void qemu_free_stack(void *stack, size_t sz)
     munmap(stack, sz);
 }
 
+/*
+ * Disable CFI checks.
+ * We are going to call a signal hander directly. Such handler may or may not
+ * have been defined in our binary, so there's no guarantee that the pointer
+ * used to set the handler is a cfi-valid pointer. Since the handlers are
+ * stored in kernel memory, changing the handler to an attacker-defined
+ * function requires being able to call a sigaction() syscall,
+ * which is not as easy as overwriting a pointer in memory.
+ */
+QEMU_DISABLE_CFI
 void sigaction_invoke(struct sigaction *action,
                       struct qemu_signalfd_siginfo *info)
 {
