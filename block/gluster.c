@@ -359,8 +359,8 @@ static int qemu_gluster_parse_uri(BlockdevOptionsGluster *gconf,
         return -EINVAL;
     }
 
-    gconf->server = g_new0(SocketAddressList, 1);
-    gconf->server->value = gsconf = g_new0(SocketAddress, 1);
+    gsconf = g_new0(SocketAddress, 1);
+    QAPI_LIST_PREPEND(gconf->server, gsconf);
 
     /* transport */
     if (!uri->scheme || !strcmp(uri->scheme, "gluster")) {
@@ -514,7 +514,7 @@ static int qemu_gluster_parse_json(BlockdevOptionsGluster *gconf,
 {
     QemuOpts *opts;
     SocketAddress *gsconf = NULL;
-    SocketAddressList *curr = NULL;
+    SocketAddressList **tail;
     QDict *backing_options = NULL;
     Error *local_err = NULL;
     char *str = NULL;
@@ -523,8 +523,7 @@ static int qemu_gluster_parse_json(BlockdevOptionsGluster *gconf,
 
     /* create opts info from runtime_json_opts list */
     opts = qemu_opts_create(&runtime_json_opts, NULL, 0, &error_abort);
-    qemu_opts_absorb_qdict(opts, options, &local_err);
-    if (local_err) {
+    if (!qemu_opts_absorb_qdict(opts, options, errp)) {
         goto out;
     }
 
@@ -548,6 +547,7 @@ static int qemu_gluster_parse_json(BlockdevOptionsGluster *gconf,
     }
     gconf->path = g_strdup(ptr);
     qemu_opts_del(opts);
+    tail = &gconf->server;
 
     for (i = 0; i < num_servers; i++) {
         str = g_strdup_printf(GLUSTER_OPT_SERVER_PATTERN"%d.", i);
@@ -555,8 +555,7 @@ static int qemu_gluster_parse_json(BlockdevOptionsGluster *gconf,
 
         /* create opts info from runtime_type_opts list */
         opts = qemu_opts_create(&runtime_type_opts, NULL, 0, &error_abort);
-        qemu_opts_absorb_qdict(opts, backing_options, &local_err);
-        if (local_err) {
+        if (!qemu_opts_absorb_qdict(opts, backing_options, errp)) {
             goto out;
         }
 
@@ -586,8 +585,7 @@ static int qemu_gluster_parse_json(BlockdevOptionsGluster *gconf,
         if (gsconf->type == SOCKET_ADDRESS_TYPE_INET) {
             /* create opts info from runtime_inet_opts list */
             opts = qemu_opts_create(&runtime_inet_opts, NULL, 0, &error_abort);
-            qemu_opts_absorb_qdict(opts, backing_options, &local_err);
-            if (local_err) {
+            if (!qemu_opts_absorb_qdict(opts, backing_options, errp)) {
                 goto out;
             }
 
@@ -635,8 +633,7 @@ static int qemu_gluster_parse_json(BlockdevOptionsGluster *gconf,
         } else {
             /* create opts info from runtime_unix_opts list */
             opts = qemu_opts_create(&runtime_unix_opts, NULL, 0, &error_abort);
-            qemu_opts_absorb_qdict(opts, backing_options, &local_err);
-            if (local_err) {
+            if (!qemu_opts_absorb_qdict(opts, backing_options, errp)) {
                 goto out;
             }
 
@@ -659,15 +656,7 @@ static int qemu_gluster_parse_json(BlockdevOptionsGluster *gconf,
             qemu_opts_del(opts);
         }
 
-        if (gconf->server == NULL) {
-            gconf->server = g_new0(SocketAddressList, 1);
-            gconf->server->value = gsconf;
-            curr = gconf->server;
-        } else {
-            curr->next = g_new0(SocketAddressList, 1);
-            curr->next->value = gsconf;
-            curr = curr->next;
-        }
+        QAPI_LIST_APPEND(tail, gsconf);
         gsconf = NULL;
 
         qobject_unref(backing_options);
@@ -815,13 +804,10 @@ static int qemu_gluster_open(BlockDriverState *bs,  QDict *options,
     int ret = 0;
     BlockdevOptionsGluster *gconf = NULL;
     QemuOpts *opts;
-    Error *local_err = NULL;
     const char *filename, *logfile;
 
     opts = qemu_opts_create(&runtime_opts, NULL, 0, &error_abort);
-    qemu_opts_absorb_qdict(opts, options, &local_err);
-    if (local_err) {
-        error_propagate(errp, local_err);
+    if (!qemu_opts_absorb_qdict(opts, options, errp)) {
         ret = -EINVAL;
         goto out;
     }
@@ -1228,6 +1214,7 @@ static coroutine_fn int qemu_gluster_co_truncate(BlockDriverState *bs,
                                                  int64_t offset,
                                                  bool exact,
                                                  PreallocMode prealloc,
+                                                 BdrvRequestFlags flags,
                                                  Error **errp)
 {
     BDRVGlusterState *s = bs->opaque;
@@ -1356,12 +1343,6 @@ static int64_t qemu_gluster_allocated_file_size(BlockDriverState *bs)
     } else {
         return st.st_blocks * 512;
     }
-}
-
-static int qemu_gluster_has_zero_init(BlockDriverState *bs)
-{
-    /* GlusterFS volume could be backed by a block device */
-    return 0;
 }
 
 /*
@@ -1568,8 +1549,6 @@ static BlockDriver bdrv_gluster = {
     .bdrv_co_readv                = qemu_gluster_co_readv,
     .bdrv_co_writev               = qemu_gluster_co_writev,
     .bdrv_co_flush_to_disk        = qemu_gluster_co_flush_to_disk,
-    .bdrv_has_zero_init           = qemu_gluster_has_zero_init,
-    .bdrv_has_zero_init_truncate  = qemu_gluster_has_zero_init,
 #ifdef CONFIG_GLUSTERFS_DISCARD
     .bdrv_co_pdiscard             = qemu_gluster_co_pdiscard,
 #endif
@@ -1600,8 +1579,6 @@ static BlockDriver bdrv_gluster_tcp = {
     .bdrv_co_readv                = qemu_gluster_co_readv,
     .bdrv_co_writev               = qemu_gluster_co_writev,
     .bdrv_co_flush_to_disk        = qemu_gluster_co_flush_to_disk,
-    .bdrv_has_zero_init           = qemu_gluster_has_zero_init,
-    .bdrv_has_zero_init_truncate  = qemu_gluster_has_zero_init,
 #ifdef CONFIG_GLUSTERFS_DISCARD
     .bdrv_co_pdiscard             = qemu_gluster_co_pdiscard,
 #endif
@@ -1632,8 +1609,6 @@ static BlockDriver bdrv_gluster_unix = {
     .bdrv_co_readv                = qemu_gluster_co_readv,
     .bdrv_co_writev               = qemu_gluster_co_writev,
     .bdrv_co_flush_to_disk        = qemu_gluster_co_flush_to_disk,
-    .bdrv_has_zero_init           = qemu_gluster_has_zero_init,
-    .bdrv_has_zero_init_truncate  = qemu_gluster_has_zero_init,
 #ifdef CONFIG_GLUSTERFS_DISCARD
     .bdrv_co_pdiscard             = qemu_gluster_co_pdiscard,
 #endif
@@ -1670,8 +1645,6 @@ static BlockDriver bdrv_gluster_rdma = {
     .bdrv_co_readv                = qemu_gluster_co_readv,
     .bdrv_co_writev               = qemu_gluster_co_writev,
     .bdrv_co_flush_to_disk        = qemu_gluster_co_flush_to_disk,
-    .bdrv_has_zero_init           = qemu_gluster_has_zero_init,
-    .bdrv_has_zero_init_truncate  = qemu_gluster_has_zero_init,
 #ifdef CONFIG_GLUSTERFS_DISCARD
     .bdrv_co_pdiscard             = qemu_gluster_co_pdiscard,
 #endif

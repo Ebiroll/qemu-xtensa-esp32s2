@@ -21,6 +21,8 @@
 #include "hw/ppc/pnv_xscom.h"
 #include "hw/irq.h"
 #include "hw/qdev-properties.h"
+#include "qom/object.h"
+#include "trace.h"
 
 #define phb_error(phb, fmt, ...)                                        \
     qemu_log_mask(LOG_GUEST_ERROR, "phb4[%d:%d]: " fmt "\n",            \
@@ -390,7 +392,7 @@ static void pnv_phb4_ioda_write(PnvPHB4 *phb, uint64_t val)
             v &= 0xffffffffffff0000ull;
             v |= 0x000000000000cfffull & val;
         }
-        *tptr = val;
+        *tptr = v;
         break;
     }
     case IODA3_TBL_MBT:
@@ -888,7 +890,7 @@ static bool pnv_phb4_resolve_pe(PnvPhb4DMASpace *ds)
     /* Read RTE */
     bus_num = pci_bus_num(ds->bus);
     addr = rtt & PHB_RTT_BASE_ADDRESS_MASK;
-    addr += 2 * ((bus_num << 8) | ds->devfn);
+    addr += 2 * PCI_BUILD_BDF(bus_num, ds->devfn);
     if (dma_memory_read(&address_space_memory, addr, &rte, sizeof(rte))) {
         phb_error(ds->phb, "Failed to read RTT entry at 0x%"PRIx64, addr);
         /* Set error bits ? fence ? ... */
@@ -1042,8 +1044,8 @@ static IOMMUTLBEntry pnv_phb4_translate_iommu(IOMMUMemoryRegion *iommu,
 }
 
 #define TYPE_PNV_PHB4_IOMMU_MEMORY_REGION "pnv-phb4-iommu-memory-region"
-#define PNV_PHB4_IOMMU_MEMORY_REGION(obj) \
-    OBJECT_CHECK(IOMMUMemoryRegion, (obj), TYPE_PNV_PHB4_IOMMU_MEMORY_REGION)
+DECLARE_INSTANCE_CHECKER(IOMMUMemoryRegion, PNV_PHB4_IOMMU_MEMORY_REGION,
+                         TYPE_PNV_PHB4_IOMMU_MEMORY_REGION)
 
 static void pnv_phb4_iommu_memory_region_class_init(ObjectClass *klass,
                                                     void *data)
@@ -1155,12 +1157,10 @@ static void pnv_phb4_instance_init(Object *obj)
     QLIST_INIT(&phb->dma_spaces);
 
     /* XIVE interrupt source object */
-    object_initialize_child(obj, "source", &phb->xsrc, sizeof(XiveSource),
-                            TYPE_XIVE_SOURCE, &error_abort, NULL);
+    object_initialize_child(obj, "source", &phb->xsrc, TYPE_XIVE_SOURCE);
 
     /* Root Port */
-    object_initialize_child(obj, "root", &phb->root, sizeof(phb->root),
-                            TYPE_PNV_PHB4_ROOT_PORT, &error_abort, NULL);
+    object_initialize_child(obj, "root", &phb->root, TYPE_PNV_PHB4_ROOT_PORT);
 
     qdev_prop_set_int32(DEVICE(&phb->root), "addr", PCI_DEVFN(0, 0));
     qdev_prop_set_bit(DEVICE(&phb->root), "multifunction", false);
@@ -1171,7 +1171,6 @@ static void pnv_phb4_realize(DeviceState *dev, Error **errp)
     PnvPHB4 *phb = PNV_PHB4(dev);
     PCIHostState *pci = PCI_HOST_BRIDGE(dev);
     XiveSource *xsrc = &phb->xsrc;
-    Error *local_err = NULL;
     int nr_irqs;
     char name[32];
 
@@ -1210,8 +1209,7 @@ static void pnv_phb4_realize(DeviceState *dev, Error **errp)
     /* Add a single Root port */
     qdev_prop_set_uint8(DEVICE(&phb->root), "chassis", phb->chip_id);
     qdev_prop_set_uint16(DEVICE(&phb->root), "slot", phb->phb_id);
-    qdev_set_parent_bus(DEVICE(&phb->root), BUS(pci->bus));
-    qdev_init_nofail(DEVICE(&phb->root));
+    qdev_realize(DEVICE(&phb->root), BUS(pci->bus), &error_fatal);
 
     /* Setup XIVE Source */
     if (phb->big_phb) {
@@ -1219,11 +1217,9 @@ static void pnv_phb4_realize(DeviceState *dev, Error **errp)
     } else {
         nr_irqs = PNV_PHB4_MAX_INTs >> 1;
     }
-    object_property_set_int(OBJECT(xsrc), nr_irqs, "nr-irqs", &error_fatal);
-    object_property_set_link(OBJECT(xsrc), OBJECT(phb), "xive", &error_fatal);
-    object_property_set_bool(OBJECT(xsrc), true, "realized", &local_err);
-    if (local_err) {
-        error_propagate(errp, local_err);
+    object_property_set_int(OBJECT(xsrc), "nr-irqs", nr_irqs, &error_fatal);
+    object_property_set_link(OBJECT(xsrc), "xive", OBJECT(phb), &error_fatal);
+    if (!qdev_realize(DEVICE(xsrc), NULL, errp)) {
         return;
     }
 
@@ -1261,6 +1257,8 @@ static void pnv_phb4_xive_notify(XiveNotifier *xf, uint32_t srcno)
     uint32_t offset = phb->regs[PHB_INT_NOTIFY_INDEX >> 3];
     uint64_t data = XIVE_TRIGGER_PQ | offset | srcno;
     MemTxResult result;
+
+    trace_pnv_phb4_xive_notify(notif_port, data);
 
     address_space_stq_be(&address_space_memory, notif_port, data,
                          MEMTXATTRS_UNSPECIFIED, &result);

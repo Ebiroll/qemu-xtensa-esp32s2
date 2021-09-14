@@ -17,7 +17,6 @@
 #include "hw/arm/fsl-imx7.h"
 #include "hw/boards.h"
 #include "hw/qdev-properties.h"
-#include "sysemu/sysemu.h"
 #include "qemu/error-report.h"
 #include "sysemu/qtest.h"
 
@@ -41,8 +40,8 @@ static void mcimx7d_sabre_init(MachineState *machine)
     };
 
     s = FSL_IMX7(object_new(TYPE_FSL_IMX7));
-    object_property_add_child(OBJECT(machine), "soc", OBJECT(s), &error_fatal);
-    object_property_set_bool(OBJECT(s), true, "realized", &error_fatal);
+    object_property_add_child(OBJECT(machine), "soc", OBJECT(s));
+    qdev_realize(DEVICE(s), NULL, &error_fatal);
 
     memory_region_add_subregion(get_system_memory(), FSL_IMX7_MMDC_ADDR,
                                 machine->ram);
@@ -56,10 +55,9 @@ static void mcimx7d_sabre_init(MachineState *machine)
         di = drive_get_next(IF_SD);
         blk = di ? blk_by_legacy_dinfo(di) : NULL;
         bus = qdev_get_child_bus(DEVICE(&s->usdhc[i]), "sd-bus");
-        carddev = qdev_create(bus, TYPE_SD_CARD);
-        qdev_prop_set_drive(carddev, "drive", blk, &error_fatal);
-        object_property_set_bool(OBJECT(carddev), true,
-                                 "realized", &error_fatal);
+        carddev = qdev_new(TYPE_SD_CARD);
+        qdev_prop_set_drive_err(carddev, "drive", blk, &error_fatal);
+        qdev_realize_and_unref(carddev, bus, &error_fatal);
     }
 
     if (!qtest_enabled()) {
@@ -69,7 +67,7 @@ static void mcimx7d_sabre_init(MachineState *machine)
 
 static void mcimx7d_sabre_machine_init(MachineClass *mc)
 {
-    mc->desc = "Freescale i.MX7 DUAL SABRE (Cortex A7)";
+    mc->desc = "Freescale i.MX7 DUAL SABRE (Cortex-A7)";
     mc->init = mcimx7d_sabre_init;
     mc->max_cpus = FSL_IMX7_NUM_CPUS;
     mc->default_ram_id = "mcimx7d-sabre.ram";

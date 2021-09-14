@@ -558,7 +558,7 @@ static int vhdx_log_flush(BlockDriverState *bs, BDRVVHDXState *s,
                     goto exit;
                 }
                 ret = bdrv_truncate(bs->file, new_file_size, false,
-                                    PREALLOC_MODE_OFF, NULL);
+                                    PREALLOC_MODE_OFF, 0, NULL);
                 if (ret < 0) {
                     goto exit;
                 }
@@ -801,7 +801,7 @@ int vhdx_parse_log(BlockDriverState *bs, BDRVVHDXState *s, bool *flushed,
     }
 
     if (logs.valid) {
-        if (bs->read_only) {
+        if (bdrv_is_read_only(bs)) {
             bdrv_refresh_filename(bs);
             ret = -EPERM;
             error_setg(errp,

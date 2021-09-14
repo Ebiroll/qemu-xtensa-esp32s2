@@ -83,6 +83,7 @@ static const VMStateDescription microbit_i2c_vmstate = {
     .fields = (VMStateField[]) {
         VMSTATE_UINT32_ARRAY(regs, MicrobitI2CState, MICROBIT_I2C_NREGS),
         VMSTATE_UINT32(read_idx, MicrobitI2CState),
+        VMSTATE_END_OF_LIST()
     },
 };
 
@@ -100,7 +101,7 @@ static void microbit_i2c_realize(DeviceState *dev, Error **errp)
     MicrobitI2CState *s = MICROBIT_I2C(dev);
 
     memory_region_init_io(&s->iomem, OBJECT(s), &microbit_i2c_ops, s,
-                          "microbit.twi", NRF51_TWI_SIZE);
+                          "microbit.twi", NRF51_PERIPHERAL_SIZE);
     sysbus_init_mmio(sbd, &s->iomem);
 }
 

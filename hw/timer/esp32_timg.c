@@ -618,7 +618,7 @@ static void esp32_timg_init(Object *obj)
                         NULL,
                         esp32_timg_set_apb_freq,
                         NULL,
-                        obj, &error_abort);
+                        obj);
 
     s->rtc_slow_freq_hz = 150000;
     s->xtal_freq_hz = 40000000;
@@ -626,7 +626,7 @@ static void esp32_timg_init(Object *obj)
 
     esp32_timg_timer_init(s, &s->t0, TIMG_T0_INT);
     esp32_timg_timer_init(s, &s->t1, TIMG_T1_INT);
-    esp32_timg_timer_init(s, &s->lact, TIMG_T0_INT);
+    esp32_timg_timer_init(s, &s->lact, TIMG_LACT_INT);
 
     s->wdt.parent = s;
     timer_init_ns(&s->wdt.stage_timer, QEMU_CLOCK_VIRTUAL, esp32_timg_wdt_cb, &s->wdt);

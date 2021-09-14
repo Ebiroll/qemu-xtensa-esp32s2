@@ -11,8 +11,6 @@
  */
 
 #include "qemu/osdep.h"
-#include "cpu.h"
-#include "tcg/tcg.h"
 #include "exec/exec-all.h"
 
 void tb_flush(CPUState *cpu)
@@ -21,4 +19,21 @@ void tb_flush(CPUState *cpu)
 
 void tlb_set_dirty(CPUState *cpu, target_ulong vaddr)
 {
+}
+
+void *probe_access(CPUArchState *env, target_ulong addr, int size,
+                   MMUAccessType access_type, int mmu_idx, uintptr_t retaddr)
+{
+     /* Handled by hardware accelerator. */
+     g_assert_not_reached();
+}
+
+void QEMU_NORETURN cpu_loop_exit(CPUState *cpu)
+{
+    g_assert_not_reached();
+}
+
+void QEMU_NORETURN cpu_loop_exit_restore(CPUState *cpu, uintptr_t pc)
+{
+    g_assert_not_reached();
 }

@@ -1,10 +1,10 @@
 #
 # Docker x86_64 target
 #
-# This docker target builds on the debian Stretch base image. Further
+# This docker target builds on the Debian Buster base image. Further
 # libraries which are not widely available are installed by hand.
 #
-FROM qemu:debian10
+FROM qemu/debian10
 MAINTAINER Philippe Mathieu-Daudé <f4bug@amsat.org>
 
 RUN apt update && \
@@ -14,13 +14,23 @@ RUN apt update && \
 RUN apt update && \
     DEBIAN_FRONTEND=noninteractive eatmydata \
     apt install -y --no-install-recommends \
+        cscope \
+        genisoimage \
+        exuberant-ctags \
+        global \
         libbz2-dev \
         liblzo2-dev \
         libgcrypt20-dev \
+        libfdt-dev \
         librdmacm-dev \
         libsasl2-dev \
         libsnappy-dev \
-        libvte-dev
+        libvte-dev \
+        netcat-openbsd \
+        openssh-client \
+        python3-numpy \
+        python3-opencv \
+        python3-venv
 
 # virgl
 RUN apt update && \

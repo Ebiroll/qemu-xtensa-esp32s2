@@ -25,6 +25,7 @@
 #include "migration/vmstate.h"
 #include "qemu/module.h"
 #include "sysemu/dma.h"
+#include "qom/object.h"
 
 enum {
     AC97_Reset                     = 0x00,
@@ -126,8 +127,7 @@ enum {
 #define MUTE_SHIFT 15
 
 #define TYPE_AC97 "AC97"
-#define AC97(obj) \
-    OBJECT_CHECK(AC97LinkState, (obj), TYPE_AC97)
+OBJECT_DECLARE_SIMPLE_TYPE(AC97LinkState, AC97)
 
 #define REC_MASK 7
 enum {
@@ -158,7 +158,7 @@ typedef struct AC97BusMasterRegs {
     BD bd;
 } AC97BusMasterRegs;
 
-typedef struct AC97LinkState {
+struct AC97LinkState {
     PCIDevice dev;
     QEMUSoundCard card;
     uint32_t glob_cnt;
@@ -175,7 +175,7 @@ typedef struct AC97LinkState {
     int bup_flag;
     MemoryRegion io_nam;
     MemoryRegion io_nabm;
-} AC97LinkState;
+};
 
 enum {
     BUP_SET = 1,
@@ -573,11 +573,9 @@ static uint32_t nam_readb (void *opaque, uint32_t addr)
 static uint32_t nam_readw (void *opaque, uint32_t addr)
 {
     AC97LinkState *s = opaque;
-    uint32_t val = ~0U;
     uint32_t index = addr;
     s->cas = 0;
-    val = mixer_load (s, index);
-    return val;
+    return mixer_load(s, index);
 }
 
 static uint32_t nam_readl (void *opaque, uint32_t addr)
@@ -1395,12 +1393,6 @@ static void ac97_exit(PCIDevice *dev)
     AUD_remove_card(&s->card);
 }
 
-static int ac97_init (PCIBus *bus)
-{
-    pci_create_simple(bus, -1, TYPE_AC97);
-    return 0;
-}
-
 static Property ac97_properties[] = {
     DEFINE_AUDIO_PROPERTIES(AC97LinkState, card),
     DEFINE_PROP_END_OF_LIST (),
@@ -1438,7 +1430,8 @@ static const TypeInfo ac97_info = {
 static void ac97_register_types (void)
 {
     type_register_static (&ac97_info);
-    pci_register_soundhw("ac97", "Intel 82801AA AC97 Audio", ac97_init);
+    deprecated_register_soundhw("ac97", "Intel 82801AA AC97 Audio",
+                                0, TYPE_AC97);
 }
 
 type_init (ac97_register_types)

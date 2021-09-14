@@ -11,9 +11,10 @@ qemu-img: --image-opts, -f, and -l require a filename argument.
 qemu-img: --image-opts, -f, and -l require a filename argument.
 qemu-img: Invalid option list: ,
 qemu-img: Invalid parameter 'snapshot.foo'
-qemu-img: Failed in parsing snapshot param 'snapshot.foo'
+qemu-img: Failed in parsing snapshot param 'snapshot.foo=bar'
 qemu-img: --output must be used with human or json as argument.
-qemu-img: Image size must be less than 8 EiB!
+qemu-img: Invalid image size specified. You may use k, M, G, T, P or E suffixes for
+qemu-img: kilobytes, megabytes, gigabytes, terabytes, petabytes and exabytes.
 qemu-img: Unknown file format 'foo'
 
 == Size calculation for a new file (human) ==

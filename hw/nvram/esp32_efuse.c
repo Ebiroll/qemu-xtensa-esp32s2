@@ -19,6 +19,7 @@
 #include "hw/sysbus.h"
 #include "hw/irq.h"
 #include "hw/qdev-properties.h"
+#include "hw/qdev-properties-system.h"
 #include "hw/nvram/esp32_efuse.h"
 
 static void esp32_efuse_read_op(Esp32EfuseState *s);
@@ -154,15 +155,9 @@ static void esp32_efuse_read_op(Esp32EfuseState *s)
 {
     s->cmd_reg = EFUSE_READ;
     if (s->blk != NULL) {
-        uint64_t perm = BLK_PERM_CONSISTENT_READ |
-                                (blk_is_read_only(s->blk) ? 0 : BLK_PERM_WRITE);
-        int ret = blk_set_perm(s->blk, perm, BLK_PERM_ALL, NULL);
-        if (ret != 0) {
-            fprintf(stderr, "%s: failed to set permission (%d)\n", __func__, ret);
-        }
-        ret = blk_pread(s->blk, 0, &s->efuse_rd, sizeof(s->efuse_rd));
+        int ret = blk_pread(s->blk, 0, &s->efuse_rd, sizeof(s->efuse_rd));
         if (ret != sizeof(s->efuse_rd)) {
-            fprintf(stderr, "%s: failed to read the block device (%d)\n", __func__, ret);
+            error_report("%s: failed to read the block device (%d)", __func__, ret);
         }
     }
 
@@ -183,6 +178,7 @@ static void esp32_efuse_read_op(Esp32EfuseState *s)
     /* Other wr_dis bits are not emulated, but can be handled here if necessary */
 
     esp32_efuse_op_timer_start(s);
+    qemu_irq_pulse(s->efuse_update_gpio);
 }
 
 static void esp32_efuse_program_op(Esp32EfuseState *s)
@@ -198,13 +194,13 @@ static void esp32_efuse_program_op(Esp32EfuseState *s)
         uint32_t wr_word = wr[i];
         uint32_t wr_dis_word = wr_dis[i];
         uint32_t rd_word = rd[i];
-        dst[i] = (wr_word & (~wr_dis_word)) | (rd_word & wr_dis_word);
+        dst[i] = (wr_word & (~wr_dis_word)) | rd_word;
     }
 
     if (s->blk != NULL) {
         int ret = blk_pwrite(s->blk, 0, &result, sizeof(result), 0);
         if (ret != sizeof(result)) {
-            fprintf(stderr, "%s: failed to write to block device (%d)\n", __func__, ret);
+            error_report("%s: failed to write to block device (%d)", __func__, ret);
         }
     }
 
@@ -248,6 +244,19 @@ static void esp32_efuse_reset(DeviceState *dev)
 
 static void esp32_efuse_realize(DeviceState *dev, Error **errp)
 {
+    Esp32EfuseState *s = ESP32_EFUSE(dev);
+    if (s->blk != NULL) {
+        if (!blk_supports_write_perm(s->blk)) {
+            error_setg(errp, "%s: block device is not writeable", __func__);
+            return;
+        }
+        uint64_t perm = BLK_PERM_CONSISTENT_READ | BLK_PERM_WRITE;
+        int ret = blk_set_perm(s->blk, perm, BLK_PERM_ALL, NULL);
+        if (ret != 0) {
+            error_setg(errp, "%s: failed to set permission (%d)", __func__, ret);
+            return;
+        }
+    }
 }
 
 static void esp32_efuse_init(Object *obj)
@@ -261,6 +270,7 @@ static void esp32_efuse_init(Object *obj)
     sysbus_init_irq(sbd, &s->irq);
 
     timer_init_ns(&s->op_timer, QEMU_CLOCK_VIRTUAL, esp32_efuse_timer_cb, s);
+    qdev_init_gpio_out_named(DEVICE(sbd), &s->efuse_update_gpio, ESP32_EFUSE_UPDATE_GPIO, 1);
 
     memset(&s->efuse_rd, 0, sizeof(s->efuse_rd));
     memset(&s->efuse_wr, 0, sizeof(s->efuse_wr));

@@ -5,7 +5,7 @@
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
- * License version 2 as published by the Free Software Foundation.
+ * License version 2.1 as published by the Free Software Foundation.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -19,11 +19,12 @@
 #include "qemu/osdep.h"
 #include <getopt.h>
 #include "libqtest-single.h"
+#include "qapi/error.h"
 #include "qapi/qmp/qdict.h"
-#include "qapi/qmp/qbool.h"
-#include "qapi/qmp/qstring.h"
 #include "qemu/module.h"
-#include "qapi/qmp/qlist.h"
+#include "qapi/qobject-input-visitor.h"
+#include "qapi/qapi-visit-machine.h"
+#include "qapi/qapi-visit-qom.h"
 #include "libqos/malloc.h"
 #include "libqos/qgraph.h"
 #include "libqos/qgraph_internal.h"
@@ -51,13 +52,20 @@ static void qos_set_machines_devices_available(void)
 {
     QDict *response;
     QDict *args = qdict_new();
-    QList *list;
+    QObject *ret;
+    Visitor *v;
+    MachineInfoList *mach_info;
+    ObjectTypeInfoList *type_info;
 
     qtest_start("-machine none");
     response = qmp("{ 'execute': 'query-machines' }");
-    list = qdict_get_qlist(response, "return");
+    ret = qdict_get(response, "return");
 
-    apply_to_qlist(list, true);
+    v = qobject_input_visitor_new(ret);
+    visit_type_MachineInfoList(v, NULL, &mach_info, &error_abort);
+    visit_free(v);
+    machines_apply_to_node(mach_info);
+    qapi_free_MachineInfoList(mach_info);
 
     qobject_unref(response);
 
@@ -66,10 +74,13 @@ static void qos_set_machines_devices_available(void)
 
     response = qmp("{'execute': 'qom-list-types',"
                    " 'arguments': %p }", args);
-    g_assert(qdict_haskey(response, "return"));
-    list = qdict_get_qlist(response, "return");
+    ret = qdict_get(response, "return");
 
-    apply_to_qlist(list, false);
+    v = qobject_input_visitor_new(ret);
+    visit_type_ObjectTypeInfoList(v, NULL, &type_info, &error_abort);
+    visit_free(v);
+    types_apply_to_node(type_info);
+    qapi_free_ObjectTypeInfoList(type_info);
 
     qtest_end();
     qobject_unref(response);
@@ -78,6 +89,9 @@ static void qos_set_machines_devices_available(void)
 
 static void restart_qemu_or_continue(char *path)
 {
+    if (g_test_verbose()) {
+        qos_printf("Run QEMU with: '%s'\n", path);
+    }
     /* compares the current command line with the
      * one previously executed: if they are the same,
      * don't restart QEMU, if they differ, stop previous
@@ -302,15 +316,25 @@ static void walk_path(QOSGraphNode *orig_path, int len)
  *   machine/drivers/test objects
  * - Cleans up everything
  */
-int main(int argc, char **argv)
+int main(int argc, char **argv, char** envp)
 {
     g_test_init(&argc, &argv, NULL);
+    if (g_test_verbose()) {
+        qos_printf("ENVIRONMENT VARIABLES: {\n");
+        for (char **env = envp; *env != 0; env++) {
+            qos_printf("\t%s\n", *env);
+        }
+        qos_printf("}\n");
+    }
     qos_graph_init();
     module_call_init(MODULE_INIT_QOM);
     module_call_init(MODULE_INIT_LIBQOS);
     qos_set_machines_devices_available();
 
     qos_graph_foreach_test_path(walk_path);
+    if (g_test_verbose()) {
+        qos_dump_graph();
+    }
     g_test_run();
     qtest_end();
     qos_graph_destroy();

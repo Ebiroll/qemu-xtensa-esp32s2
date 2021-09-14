@@ -46,7 +46,17 @@ void gdb_do_syscall(gdb_syscall_complete_cb cb, const char *fmt, ...);
 void gdb_do_syscallv(gdb_syscall_complete_cb cb, const char *fmt, va_list va);
 int use_gdb_syscalls(void);
 void gdb_set_stop_cpu(CPUState *cpu);
-void gdb_exit(CPUArchState *, int);
+
+/**
+ * gdb_exit: exit gdb session, reporting inferior status
+ * @code: exit code reported
+ *
+ * This closes the session and sends a final packet to GDB reporting
+ * the exit status of the program. It also cleans up any connections
+ * detritus before returning.
+ */
+void gdb_exit(int code);
+
 #ifdef CONFIG_USER_ONLY
 /**
  * gdb_handlesig: yield control to gdb
@@ -125,15 +135,6 @@ static inline int gdb_get_reg128(GByteArray *buf, uint64_t val_hi,
     return 16;
 }
 
-static inline int gdb_get_float32(GByteArray *array, float32 val)
-{
-    uint8_t buf[sizeof(CPU_FloatU)];
-
-    stfl_p(buf, val);
-    g_byte_array_append(array, buf, sizeof(buf));
-
-    return sizeof(buf);
-}
 static inline int gdb_get_zeroes(GByteArray *array, size_t len)
 {
     guint oldlen = array->len;
@@ -166,13 +167,15 @@ static inline uint8_t * gdb_get_reg_ptr(GByteArray *buf, int len)
 
 #endif
 
-#ifdef CONFIG_USER_ONLY
-int gdbserver_start(int);
-#else
-int gdbserver_start(const char *port);
-#endif
-
-void gdbserver_cleanup(void);
+/**
+ * gdbserver_start: start the gdb server
+ * @port_or_device: connection spec for gdb
+ *
+ * For CONFIG_USER this is either a tcp port or a path to a fifo. For
+ * system emulation you can use a full chardev spec for your gdbserver
+ * port.
+ */
+int gdbserver_start(const char *port_or_device);
 
 /**
  * gdb_has_xml:

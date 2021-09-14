@@ -19,17 +19,22 @@
 /* Ask for warnings for anything that was marked deprecated in
  * the defined version, or before. It is a candidate for rewrite.
  */
-#define GLIB_VERSION_MIN_REQUIRED GLIB_VERSION_2_48
+#define GLIB_VERSION_MIN_REQUIRED GLIB_VERSION_2_56
 
 /* Ask for warnings if code tries to use function that did not
  * exist in the defined version. These risk breaking builds
  */
-#define GLIB_VERSION_MAX_ALLOWED GLIB_VERSION_2_48
+#define GLIB_VERSION_MAX_ALLOWED GLIB_VERSION_2_56
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 
 #include <glib.h>
+#if defined(G_OS_UNIX)
+#include <glib-unix.h>
+#include <sys/types.h>
+#include <pwd.h>
+#endif
 
 /*
  * Note that because of the GLIB_VERSION_MAX_ALLOWED constant above, allowing
@@ -63,14 +68,45 @@
  * without generating warnings.
  */
 
-#if defined(_WIN32) && !GLIB_CHECK_VERSION(2, 50, 0)
+#if defined(G_OS_UNIX)
 /*
- * g_poll has a problem on Windows when using
- * timeouts < 10ms, so use wrapper.
+ * Note: The fallback implementation is not MT-safe, and it returns a copy of
+ * the libc passwd (must be g_free() after use) but not the content. Because of
+ * these important differences the caller must be aware of, it's not #define for
+ * GLib API substitution.
  */
-#define g_poll(fds, nfds, timeout) g_poll_fixed(fds, nfds, timeout)
-gint g_poll_fixed(GPollFD *fds, guint nfds, gint timeout);
+static inline struct passwd *
+g_unix_get_passwd_entry_qemu(const gchar *user_name, GError **error)
+{
+#if GLIB_CHECK_VERSION(2, 64, 0)
+    return g_unix_get_passwd_entry(user_name, error);
+#else
+    struct passwd *p = getpwnam(user_name);
+    if (!p) {
+        g_set_error_literal(error, G_UNIX_ERROR, 0, g_strerror(errno));
+        return NULL;
+    }
+    return (struct passwd *)g_memdup(p, sizeof(*p));
 #endif
+}
+#endif /* G_OS_UNIX */
+
+static inline bool
+qemu_g_test_slow(void)
+{
+    static int cached = -1;
+    if (cached == -1) {
+        cached = g_test_slow() || getenv("G_TEST_SLOW") != NULL;
+    }
+    return cached;
+}
+
+#undef g_test_slow
+#undef g_test_thorough
+#undef g_test_quick
+#define g_test_slow() qemu_g_test_slow()
+#define g_test_thorough() qemu_g_test_slow()
+#define g_test_quick() (!qemu_g_test_slow())
 
 #pragma GCC diagnostic pop
 

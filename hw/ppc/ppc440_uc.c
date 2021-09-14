@@ -14,9 +14,7 @@
 #include "qapi/error.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
-#include "cpu.h"
 #include "hw/irq.h"
-#include "exec/address-spaces.h"
 #include "exec/memory.h"
 #include "hw/ppc/ppc.h"
 #include "hw/qdev-properties.h"
@@ -24,6 +22,7 @@
 #include "sysemu/block-backend.h"
 #include "sysemu/reset.h"
 #include "ppc440.h"
+#include "qom/object.h"
 
 /*****************************************************************************/
 /* L2 Cache as SRAM */
@@ -1032,10 +1031,9 @@ void ppc4xx_dma_init(CPUPPCState *env, int dcr_base)
 #include "hw/pci/pcie_host.h"
 
 #define TYPE_PPC460EX_PCIE_HOST "ppc460ex-pcie-host"
-#define PPC460EX_PCIE_HOST(obj) \
-    OBJECT_CHECK(PPC460EXPCIEState, (obj), TYPE_PPC460EX_PCIE_HOST)
+OBJECT_DECLARE_SIMPLE_TYPE(PPC460EXPCIEState, PPC460EX_PCIE_HOST)
 
-typedef struct PPC460EXPCIEState {
+struct PPC460EXPCIEState {
     PCIExpressHost host;
 
     MemoryRegion iomem;
@@ -1056,7 +1054,7 @@ typedef struct PPC460EXPCIEState {
     uint32_t reg_mask;
     uint32_t special;
     uint32_t cfg;
-} PPC460EXPCIEState;
+};
 
 #define DCRN_PCIE0_BASE 0x100
 #define DCRN_PCIE1_BASE 0x120
@@ -1367,15 +1365,13 @@ void ppc460ex_pcie_init(CPUPPCState *env)
 {
     DeviceState *dev;
 
-    dev = qdev_create(NULL, TYPE_PPC460EX_PCIE_HOST);
+    dev = qdev_new(TYPE_PPC460EX_PCIE_HOST);
     qdev_prop_set_int32(dev, "dcrn-base", DCRN_PCIE0_BASE);
-    qdev_init_nofail(dev);
-    object_property_set_bool(OBJECT(dev), true, "realized", NULL);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
     ppc460ex_pcie_register_dcrs(PPC460EX_PCIE_HOST(dev), env);
 
-    dev = qdev_create(NULL, TYPE_PPC460EX_PCIE_HOST);
+    dev = qdev_new(TYPE_PPC460EX_PCIE_HOST);
     qdev_prop_set_int32(dev, "dcrn-base", DCRN_PCIE1_BASE);
-    qdev_init_nofail(dev);
-    object_property_set_bool(OBJECT(dev), true, "realized", NULL);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
     ppc460ex_pcie_register_dcrs(PPC460EX_PCIE_HOST(dev), env);
 }

@@ -15,7 +15,6 @@
 #include "qemu-common.h"
 #include "qemu/cutils.h"
 #include "elf.h"
-#include "cpu.h"
 #include "exec/hwaddr.h"
 #include "monitor/monitor.h"
 #include "sysemu/kvm.h"
@@ -1031,14 +1030,11 @@ out:
 
 static void write_dump_header(DumpState *s, Error **errp)
 {
-     Error *local_err = NULL;
-
     if (s->dump_info.d_class == ELFCLASS32) {
-        create_header32(s, &local_err);
+        create_header32(s, errp);
     } else {
-        create_header64(s, &local_err);
+        create_header64(s, errp);
     }
-    error_propagate(errp, local_err);
 }
 
 static size_t dump_bitmap_get_bufsize(DumpState *s)
@@ -1575,7 +1571,7 @@ static void dump_state_prepare(DumpState *s)
 bool dump_in_progress(void)
 {
     DumpState *state = &dump_state_global;
-    return (atomic_read(&state->status) == DUMP_STATUS_ACTIVE);
+    return (qatomic_read(&state->status) == DUMP_STATUS_ACTIVE);
 }
 
 /* calculate total size of memory to be dumped (taking filter into
@@ -1885,14 +1881,14 @@ static void dump_process(DumpState *s, Error **errp)
 
     /* make sure status is written after written_size updates */
     smp_wmb();
-    atomic_set(&s->status,
+    qatomic_set(&s->status,
                (local_err ? DUMP_STATUS_FAILED : DUMP_STATUS_COMPLETED));
 
     /* send DUMP_COMPLETED message (unconditionally) */
     result = qmp_query_dump(NULL);
     /* should never fail */
     assert(result);
-    qapi_event_send_dump_completed(result, !!local_err, (local_err ? \
+    qapi_event_send_dump_completed(result, !!local_err, (local_err ?
                                    error_get_pretty(local_err) : NULL));
     qapi_free_DumpQueryResult(result);
 
@@ -1911,7 +1907,7 @@ DumpQueryResult *qmp_query_dump(Error **errp)
 {
     DumpQueryResult *result = g_new(DumpQueryResult, 1);
     DumpState *state = &dump_state_global;
-    result->status = atomic_read(&state->status);
+    result->status = qatomic_read(&state->status);
     /* make sure we are reading status and written_size in order */
     smp_rmb();
     result->completed = state->written_size;
@@ -1989,7 +1985,7 @@ void qmp_dump_guest_memory(bool paging, const char *file,
 
 #if !defined(WIN32)
     if (strstart(file, "fd:", &p)) {
-        fd = monitor_get_fd(cur_mon, p, errp);
+        fd = monitor_get_fd(monitor_cur(), p, errp);
         if (fd == -1) {
             return;
         }
@@ -1997,7 +1993,7 @@ void qmp_dump_guest_memory(bool paging, const char *file,
 #endif
 
     if  (strstart(file, "file:", &p)) {
-        fd = qemu_open(p, O_WRONLY | O_CREAT | O_TRUNC | O_BINARY, S_IRUSR);
+        fd = qemu_open_old(p, O_WRONLY | O_CREAT | O_TRUNC | O_BINARY, S_IRUSR);
         if (fd < 0) {
             error_setg_file_open(errp, errno, p);
             return;
@@ -2016,7 +2012,7 @@ void qmp_dump_guest_memory(bool paging, const char *file,
               begin, length, &local_err);
     if (local_err) {
         error_propagate(errp, local_err);
-        atomic_set(&s->status, DUMP_STATUS_FAILED);
+        qatomic_set(&s->status, DUMP_STATUS_FAILED);
         return;
     }
 
@@ -2033,39 +2029,29 @@ void qmp_dump_guest_memory(bool paging, const char *file,
 
 DumpGuestMemoryCapability *qmp_query_dump_guest_memory_capability(Error **errp)
 {
-    DumpGuestMemoryFormatList *item;
     DumpGuestMemoryCapability *cap =
                                   g_malloc0(sizeof(DumpGuestMemoryCapability));
+    DumpGuestMemoryFormatList **tail = &cap->formats;
 
     /* elf is always available */
-    item = g_malloc0(sizeof(DumpGuestMemoryFormatList));
-    cap->formats = item;
-    item->value = DUMP_GUEST_MEMORY_FORMAT_ELF;
+    QAPI_LIST_APPEND(tail, DUMP_GUEST_MEMORY_FORMAT_ELF);
 
     /* kdump-zlib is always available */
-    item->next = g_malloc0(sizeof(DumpGuestMemoryFormatList));
-    item = item->next;
-    item->value = DUMP_GUEST_MEMORY_FORMAT_KDUMP_ZLIB;
+    QAPI_LIST_APPEND(tail, DUMP_GUEST_MEMORY_FORMAT_KDUMP_ZLIB);
 
     /* add new item if kdump-lzo is available */
 #ifdef CONFIG_LZO
-    item->next = g_malloc0(sizeof(DumpGuestMemoryFormatList));
-    item = item->next;
-    item->value = DUMP_GUEST_MEMORY_FORMAT_KDUMP_LZO;
+    QAPI_LIST_APPEND(tail, DUMP_GUEST_MEMORY_FORMAT_KDUMP_LZO);
 #endif
 
     /* add new item if kdump-snappy is available */
 #ifdef CONFIG_SNAPPY
-    item->next = g_malloc0(sizeof(DumpGuestMemoryFormatList));
-    item = item->next;
-    item->value = DUMP_GUEST_MEMORY_FORMAT_KDUMP_SNAPPY;
+    QAPI_LIST_APPEND(tail, DUMP_GUEST_MEMORY_FORMAT_KDUMP_SNAPPY);
 #endif
 
     /* Windows dump is available only if target is x86_64 */
 #ifdef TARGET_X86_64
-    item->next = g_malloc0(sizeof(DumpGuestMemoryFormatList));
-    item = item->next;
-    item->value = DUMP_GUEST_MEMORY_FORMAT_WIN_DMP;
+    QAPI_LIST_APPEND(tail, DUMP_GUEST_MEMORY_FORMAT_WIN_DMP);
 #endif
 
     return cap;

@@ -17,7 +17,6 @@ DEF_HELPER_4(cas2l_parallel, void, env, i32, i32, i32)
 
 #define dh_alias_fp ptr
 #define dh_ctype_fp FPReg *
-#define dh_is_signed_fp dh_is_signed_ptr
 
 DEF_HELPER_3(exts32, void, env, fp, s32)
 DEF_HELPER_3(extf32, void, env, fp, f32)
@@ -83,6 +82,7 @@ DEF_HELPER_3(fatan, void, env, fp, fp)
 DEF_HELPER_3(fasin, void, env, fp, fp)
 DEF_HELPER_3(facos, void, env, fp, fp)
 DEF_HELPER_3(fatanh, void, env, fp, fp)
+DEF_HELPER_3(fetoxm1, void, env, fp, fp)
 DEF_HELPER_3(ftanh, void, env, fp, fp)
 DEF_HELPER_3(fsinh, void, env, fp, fp)
 DEF_HELPER_3(fcosh, void, env, fp, fp)

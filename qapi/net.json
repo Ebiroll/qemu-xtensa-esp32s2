@@ -1,4 +1,5 @@
 # -*- Mode: Python -*-
+# vim: filetype=python
 #
 
 ##
@@ -19,7 +20,7 @@
 # Returns: Nothing on success
 #          If @name is not a valid network device, DeviceNotFound
 #
-# Since: 0.14.0
+# Since: 0.14
 #
 # Notes: Not all network adapters support setting link status.  This command
 #        will succeed even if the network adapter does not support link status
@@ -41,7 +42,7 @@
 #
 # Additional arguments depend on the type.
 #
-# Since: 0.14.0
+# Since: 0.14
 #
 # Returns: Nothing on success
 #          If @type is not a valid network backend, DeviceNotFound
@@ -54,7 +55,8 @@
 # <- { "return": {} }
 #
 ##
-{ 'command': 'netdev_add', 'data': 'Netdev', 'boxed': true }
+{ 'command': 'netdev_add', 'data': 'Netdev', 'boxed': true,
+  'allow-preconfig': true }
 
 ##
 # @netdev_del:
@@ -66,7 +68,7 @@
 # Returns: Nothing on success
 #          If @id is not a valid network backend, DeviceNotFound
 #
-# Since: 0.14.0
+# Since: 0.14
 #
 # Example:
 #
@@ -74,7 +76,8 @@
 # <- { "return": {} }
 #
 ##
-{ 'command': 'netdev_del', 'data': {'id': 'str'} }
+{ 'command': 'netdev_del', 'data': {'id': 'str'},
+  'allow-preconfig': true }
 
 ##
 # @NetLegacyNicOptions:
@@ -429,15 +432,38 @@
     '*queues':        'int' } }
 
 ##
+# @NetdevVhostVDPAOptions:
+#
+# Vhost-vdpa network backend
+#
+# vDPA device is a device that uses a datapath which complies with the virtio
+# specifications with a vendor specific control path.
+#
+# @vhostdev: path of vhost-vdpa device
+#            (default:'/dev/vhost-vdpa-0')
+#
+# @queues: number of queues to be created for multiqueue vhost-vdpa
+#          (default: 1)
+#
+# Since: 5.1
+##
+{ 'struct': 'NetdevVhostVDPAOptions',
+  'data': {
+    '*vhostdev':     'str',
+    '*queues':       'int' } }
+
+##
 # @NetClientDriver:
 #
 # Available netdev drivers.
 #
 # Since: 2.7
+#
+#        @vhost-vdpa since 5.1
 ##
 { 'enum': 'NetClientDriver',
   'data': [ 'none', 'nic', 'user', 'tap', 'l2tpv3', 'socket', 'vde',
-            'bridge', 'hubport', 'netmap', 'vhost-user' ] }
+            'bridge', 'hubport', 'netmap', 'vhost-user', 'vhost-vdpa' ] }
 
 ##
 # @Netdev:
@@ -465,76 +491,8 @@
     'bridge':   'NetdevBridgeOptions',
     'hubport':  'NetdevHubPortOptions',
     'netmap':   'NetdevNetmapOptions',
-    'vhost-user': 'NetdevVhostUserOptions' } }
-
-##
-# @NetLegacy:
-#
-# Captures the configuration of a network device; legacy.
-#
-# @id: identifier for monitor commands
-#
-# @name: identifier for monitor commands, ignored if @id is present
-#
-# @opts: device type specific properties (legacy)
-#
-# Since: 1.2
-##
-{ 'struct': 'NetLegacy',
-  'data': {
-    '*id':   'str',
-    '*name': 'str',
-    'opts':  'NetLegacyOptions' } }
-
-##
-# @NetLegacyOptionsType:
-#
-# Since: 1.2
-##
-{ 'enum': 'NetLegacyOptionsType',
-  'data': ['none', 'nic', 'user', 'tap', 'l2tpv3', 'socket', 'vde',
-           'bridge', 'netmap', 'vhost-user'] }
-
-##
-# @NetLegacyOptions:
-#
-# Like Netdev, but for use only by the legacy command line options
-#
-# Since: 1.2
-##
-{ 'union': 'NetLegacyOptions',
-  'base': { 'type': 'NetLegacyOptionsType' },
-  'discriminator': 'type',
-  'data': {
-    'nic':      'NetLegacyNicOptions',
-    'user':     'NetdevUserOptions',
-    'tap':      'NetdevTapOptions',
-    'l2tpv3':   'NetdevL2TPv3Options',
-    'socket':   'NetdevSocketOptions',
-    'vde':      'NetdevVdeOptions',
-    'bridge':   'NetdevBridgeOptions',
-    'netmap':   'NetdevNetmapOptions',
-    'vhost-user': 'NetdevVhostUserOptions' } }
-
-##
-# @NetFilterDirection:
-#
-# Indicates whether a netfilter is attached to a netdev's transmit queue or
-# receive queue or both.
-#
-# @all: the filter is attached both to the receive and the transmit
-#       queue of the netdev (default).
-#
-# @rx: the filter is attached to the receive queue of the netdev,
-#      where it will receive packets sent to the netdev.
-#
-# @tx: the filter is attached to the transmit queue of the netdev,
-#      where it will receive packets sent by the netdev.
-#
-# Since: 2.5
-##
-{ 'enum': 'NetFilterDirection',
-  'data': [ 'all', 'rx', 'tx' ] }
+    'vhost-user': 'NetdevVhostUserOptions',
+    'vhost-vdpa': 'NetdevVhostVDPAOptions' } }
 
 ##
 # @RxState:

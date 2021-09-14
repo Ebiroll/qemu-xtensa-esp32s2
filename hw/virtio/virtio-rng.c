@@ -133,7 +133,7 @@ static uint64_t get_features(VirtIODevice *vdev, uint64_t f, Error **errp)
     return f;
 }
 
-static void virtio_rng_vm_state_change(void *opaque, int running,
+static void virtio_rng_vm_state_change(void *opaque, bool running,
                                        RunState state)
 {
     VirtIORNG *vrng = opaque;
@@ -176,7 +176,6 @@ static void virtio_rng_device_realize(DeviceState *dev, Error **errp)
 {
     VirtIODevice *vdev = VIRTIO_DEVICE(dev);
     VirtIORNG *vrng = VIRTIO_RNG(dev);
-    Error *local_err = NULL;
 
     if (vrng->conf.period_ms <= 0) {
         error_setg(errp, "'period' parameter expects a positive integer");
@@ -194,22 +193,20 @@ static void virtio_rng_device_realize(DeviceState *dev, Error **errp)
     if (vrng->conf.rng == NULL) {
         Object *default_backend = object_new(TYPE_RNG_BUILTIN);
 
-        user_creatable_complete(USER_CREATABLE(default_backend),
-                                &local_err);
-        if (local_err) {
-            error_propagate(errp, local_err);
+        if (!user_creatable_complete(USER_CREATABLE(default_backend),
+                                     errp)) {
             object_unref(default_backend);
             return;
         }
 
         object_property_add_child(OBJECT(dev), "default-backend",
-                                  default_backend, &error_abort);
+                                  default_backend);
 
         /* The child property took a reference, we can safely drop ours now */
         object_unref(default_backend);
 
-        object_property_set_link(OBJECT(dev), default_backend,
-                                 "rng", &error_abort);
+        object_property_set_link(OBJECT(dev), "rng", default_backend,
+                                 &error_abort);
     }
 
     vrng->rng = vrng->conf.rng;
@@ -230,13 +227,12 @@ static void virtio_rng_device_realize(DeviceState *dev, Error **errp)
                                                      vrng);
 }
 
-static void virtio_rng_device_unrealize(DeviceState *dev, Error **errp)
+static void virtio_rng_device_unrealize(DeviceState *dev)
 {
     VirtIODevice *vdev = VIRTIO_DEVICE(dev);
     VirtIORNG *vrng = VIRTIO_RNG(dev);
 
     qemu_del_vm_change_state_handler(vrng->vmstate);
-    timer_del(vrng->rate_limit_timer);
     timer_free(vrng->rate_limit_timer);
     virtio_del_queue(vdev, 0);
     virtio_cleanup(vdev);

@@ -34,11 +34,12 @@
 #include <windows.h>
 #include "qemu-common.h"
 #include "qapi/error.h"
-#include "sysemu/sysemu.h"
 #include "qemu/main-loop.h"
 #include "trace.h"
 #include "qemu/sockets.h"
 #include "qemu/cutils.h"
+#include "qemu/error-report.h"
+#include <malloc.h>
 
 /* this must come after including "trace.h" */
 #include <shlobj.h>
@@ -56,10 +57,13 @@ void *qemu_try_memalign(size_t alignment, size_t size)
 {
     void *ptr;
 
-    if (!size) {
-        abort();
+    g_assert(size != 0);
+    if (alignment < sizeof(void *)) {
+        alignment = sizeof(void *);
+    } else {
+        g_assert(is_power_of_2(alignment));
     }
-    ptr = VirtualAlloc(NULL, size, MEM_COMMIT, PAGE_READWRITE);
+    ptr = _aligned_malloc(size, alignment);
     trace_qemu_memalign(alignment, size, ptr);
     return ptr;
 }
@@ -77,9 +81,19 @@ static int get_allocation_granularity(void)
     return system_info.dwAllocationGranularity;
 }
 
-void *qemu_anon_ram_alloc(size_t size, uint64_t *align, bool shared)
+void *qemu_anon_ram_alloc(size_t size, uint64_t *align, bool shared,
+                          bool noreserve)
 {
     void *ptr;
+
+    if (noreserve) {
+        /*
+         * We need a MEM_COMMIT before accessing any memory in a MEM_RESERVE
+         * area; we cannot easily mimic POSIX MAP_NORESERVE semantics.
+         */
+        error_report("Skipping reservation of swap space is not supported.");
+        return NULL;
+    }
 
     ptr = VirtualAlloc(NULL, size, MEM_COMMIT, PAGE_READWRITE);
     trace_qemu_anon_ram_alloc(size, ptr);
@@ -93,9 +107,7 @@ void *qemu_anon_ram_alloc(size_t size, uint64_t *align, bool shared)
 void qemu_vfree(void *ptr)
 {
     trace_qemu_vfree(ptr);
-    if (ptr) {
-        VirtualFree(ptr, 0, MEM_RELEASE);
-    }
+    _aligned_free(ptr);
 }
 
 void qemu_anon_ram_free(void *ptr, size_t size)
@@ -106,7 +118,7 @@ void qemu_anon_ram_free(void *ptr, size_t size)
     }
 }
 
-#ifndef CONFIG_LOCALTIME_R
+#ifndef _POSIX_THREAD_SAFE_FUNCTIONS
 /* FIXME: add proper locking */
 struct tm *gmtime_r(const time_t *timep, struct tm *result)
 {
@@ -130,32 +142,7 @@ struct tm *localtime_r(const time_t *timep, struct tm *result)
     }
     return p;
 }
-#endif /* CONFIG_LOCALTIME_R */
-
-void qemu_set_block(int fd)
-{
-    unsigned long opt = 0;
-    WSAEventSelect(fd, NULL, 0);
-    ioctlsocket(fd, FIONBIO, &opt);
-}
-
-void qemu_set_nonblock(int fd)
-{
-    unsigned long opt = 1;
-    ioctlsocket(fd, FIONBIO, &opt);
-    qemu_fd_register(fd);
-}
-
-int socket_set_fast_reuse(int fd)
-{
-    /* Enabling the reuse of an endpoint that was used by a socket still in
-     * TIME_WAIT state is usually performed by setting SO_REUSEADDR. On Windows
-     * fast reuse is the default and SO_REUSEADDR does strange things. So we
-     * don't have to do anything here. More info can be found at:
-     * http://msdn.microsoft.com/en-us/library/windows/desktop/ms740621.aspx */
-    return 0;
-}
-
+#endif /* _POSIX_THREAD_SAFE_FUNCTIONS */
 
 static int socket_error(void)
 {
@@ -233,6 +220,37 @@ static int socket_error(void)
     }
 }
 
+void qemu_set_block(int fd)
+{
+    unsigned long opt = 0;
+    WSAEventSelect(fd, NULL, 0);
+    ioctlsocket(fd, FIONBIO, &opt);
+}
+
+int qemu_try_set_nonblock(int fd)
+{
+    unsigned long opt = 1;
+    if (ioctlsocket(fd, FIONBIO, &opt) != NO_ERROR) {
+        return -socket_error();
+    }
+    return 0;
+}
+
+void qemu_set_nonblock(int fd)
+{
+    (void)qemu_try_set_nonblock(fd);
+}
+
+int socket_set_fast_reuse(int fd)
+{
+    /* Enabling the reuse of an endpoint that was used by a socket still in
+     * TIME_WAIT state is usually performed by setting SO_REUSEADDR. On Windows
+     * fast reuse is the default and SO_REUSEADDR does strange things. So we
+     * don't have to do anything here. More info can be found at:
+     * http://msdn.microsoft.com/en-us/library/windows/desktop/ms740621.aspx */
+    return 0;
+}
+
 int inet_aton(const char *cp, struct in_addr *ia)
 {
     uint32_t addr = inet_addr(cp);
@@ -308,7 +326,7 @@ void qemu_set_tty_echo(int fd, bool echo)
     }
 }
 
-static char exec_dir[PATH_MAX];
+static const char *exec_dir;
 
 void qemu_init_exec_dir(const char *argv0)
 {
@@ -316,6 +334,10 @@ void qemu_init_exec_dir(const char *argv0)
     char *p;
     char buf[MAX_PATH];
     DWORD len;
+
+    if (exec_dir) {
+        return;
+    }
 
     len = GetModuleFileName(NULL, buf, sizeof(buf) - 1);
     if (len == 0) {
@@ -329,218 +351,16 @@ void qemu_init_exec_dir(const char *argv0)
     }
     *p = 0;
     if (access(buf, R_OK) == 0) {
-        pstrcpy(exec_dir, sizeof(exec_dir), buf);
-    }
-}
-
-char *qemu_get_exec_dir(void)
-{
-    return g_strdup(exec_dir);
-}
-
-#if !GLIB_CHECK_VERSION(2, 50, 0)
-/*
- * The original implementation of g_poll from glib has a problem on Windows
- * when using timeouts < 10 ms.
- *
- * Whenever g_poll is called with timeout < 10 ms, it does a quick poll instead
- * of wait. This causes significant performance degradation of QEMU.
- *
- * The following code is a copy of the original code from glib/gpoll.c
- * (glib commit 20f4d1820b8d4d0fc4447188e33efffd6d4a88d8 from 2014-02-19).
- * Some debug code was removed and the code was reformatted.
- * All other code modifications are marked with 'QEMU'.
- */
-
-/*
- * gpoll.c: poll(2) abstraction
- * Copyright 1998 Owen Taylor
- * Copyright 2008 Red Hat, Inc.
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, see <http://www.gnu.org/licenses/>.
- */
-
-static int poll_rest(gboolean poll_msgs, HANDLE *handles, gint nhandles,
-                     GPollFD *fds, guint nfds, gint timeout)
-{
-    DWORD ready;
-    GPollFD *f;
-    int recursed_result;
-
-    if (poll_msgs) {
-        /* Wait for either messages or handles
-         * -> Use MsgWaitForMultipleObjectsEx
-         */
-        ready = MsgWaitForMultipleObjectsEx(nhandles, handles, timeout,
-                                            QS_ALLINPUT, MWMO_ALERTABLE);
-
-        if (ready == WAIT_FAILED) {
-            gchar *emsg = g_win32_error_message(GetLastError());
-            g_warning("MsgWaitForMultipleObjectsEx failed: %s", emsg);
-            g_free(emsg);
-        }
-    } else if (nhandles == 0) {
-        /* No handles to wait for, just the timeout */
-        if (timeout == INFINITE) {
-            ready = WAIT_FAILED;
-        } else {
-            SleepEx(timeout, TRUE);
-            ready = WAIT_TIMEOUT;
-        }
+        exec_dir = g_strdup(buf);
     } else {
-        /* Wait for just handles
-         * -> Use WaitForMultipleObjectsEx
-         */
-        ready =
-            WaitForMultipleObjectsEx(nhandles, handles, FALSE, timeout, TRUE);
-        if (ready == WAIT_FAILED) {
-            gchar *emsg = g_win32_error_message(GetLastError());
-            g_warning("WaitForMultipleObjectsEx failed: %s", emsg);
-            g_free(emsg);
-        }
+        exec_dir = CONFIG_BINDIR;
     }
-
-    if (ready == WAIT_FAILED) {
-        return -1;
-    } else if (ready == WAIT_TIMEOUT || ready == WAIT_IO_COMPLETION) {
-        return 0;
-    } else if (poll_msgs && ready == WAIT_OBJECT_0 + nhandles) {
-        for (f = fds; f < &fds[nfds]; ++f) {
-            if (f->fd == G_WIN32_MSG_HANDLE && f->events & G_IO_IN) {
-                f->revents |= G_IO_IN;
-            }
-        }
-
-        /* If we have a timeout, or no handles to poll, be satisfied
-         * with just noticing we have messages waiting.
-         */
-        if (timeout != 0 || nhandles == 0) {
-            return 1;
-        }
-
-        /* If no timeout and handles to poll, recurse to poll them,
-         * too.
-         */
-        recursed_result = poll_rest(FALSE, handles, nhandles, fds, nfds, 0);
-        return (recursed_result == -1) ? -1 : 1 + recursed_result;
-    } else if (/* QEMU: removed the following unneeded statement which causes
-                * a compiler warning: ready >= WAIT_OBJECT_0 && */
-               ready < WAIT_OBJECT_0 + nhandles) {
-        for (f = fds; f < &fds[nfds]; ++f) {
-            if ((HANDLE) f->fd == handles[ready - WAIT_OBJECT_0]) {
-                f->revents = f->events;
-            }
-        }
-
-        /* If no timeout and polling several handles, recurse to poll
-         * the rest of them.
-         */
-        if (timeout == 0 && nhandles > 1) {
-            /* Remove the handle that fired */
-            int i;
-            for (i = ready - WAIT_OBJECT_0 + 1; i < nhandles; i++) {
-                handles[i-1] = handles[i];
-            }
-            nhandles--;
-            recursed_result = poll_rest(FALSE, handles, nhandles, fds, nfds, 0);
-            return (recursed_result == -1) ? -1 : 1 + recursed_result;
-        }
-        return 1;
-    }
-
-    return 0;
 }
 
-gint g_poll(GPollFD *fds, guint nfds, gint timeout)
+const char *qemu_get_exec_dir(void)
 {
-    HANDLE handles[MAXIMUM_WAIT_OBJECTS];
-    gboolean poll_msgs = FALSE;
-    GPollFD *f;
-    gint nhandles = 0;
-    int retval;
-
-    for (f = fds; f < &fds[nfds]; ++f) {
-        if (f->fd == G_WIN32_MSG_HANDLE && (f->events & G_IO_IN)) {
-            poll_msgs = TRUE;
-        } else if (f->fd > 0) {
-            /* Don't add the same handle several times into the array, as
-             * docs say that is not allowed, even if it actually does seem
-             * to work.
-             */
-            gint i;
-
-            for (i = 0; i < nhandles; i++) {
-                if (handles[i] == (HANDLE) f->fd) {
-                    break;
-                }
-            }
-
-            if (i == nhandles) {
-                if (nhandles == MAXIMUM_WAIT_OBJECTS) {
-                    g_warning("Too many handles to wait for!\n");
-                    break;
-                } else {
-                    handles[nhandles++] = (HANDLE) f->fd;
-                }
-            }
-        }
-    }
-
-    for (f = fds; f < &fds[nfds]; ++f) {
-        f->revents = 0;
-    }
-
-    if (timeout == -1) {
-        timeout = INFINITE;
-    }
-
-    /* Polling for several things? */
-    if (nhandles > 1 || (nhandles > 0 && poll_msgs)) {
-        /* First check if one or several of them are immediately
-         * available
-         */
-        retval = poll_rest(poll_msgs, handles, nhandles, fds, nfds, 0);
-
-        /* If not, and we have a significant timeout, poll again with
-         * timeout then. Note that this will return indication for only
-         * one event, or only for messages. We ignore timeouts less than
-         * ten milliseconds as they are mostly pointless on Windows, the
-         * MsgWaitForMultipleObjectsEx() call will timeout right away
-         * anyway.
-         *
-         * Modification for QEMU: replaced timeout >= 10 by timeout > 0.
-         */
-        if (retval == 0 && (timeout == INFINITE || timeout > 0)) {
-            retval = poll_rest(poll_msgs, handles, nhandles,
-                               fds, nfds, timeout);
-        }
-    } else {
-        /* Just polling for one thing, so no need to check first if
-         * available immediately
-         */
-        retval = poll_rest(poll_msgs, handles, nhandles, fds, nfds, timeout);
-    }
-
-    if (retval == -1) {
-        for (f = fds; f < &fds[nfds]; ++f) {
-            f->revents = 0;
-        }
-    }
-
-    return retval;
+    return exec_dir;
 }
-#endif
 
 int getpagesize(void)
 {
@@ -807,4 +627,28 @@ bool qemu_write_pidfile(const char *filename, Error **errp)
         return false;
     }
     return true;
+}
+
+char *qemu_get_host_name(Error **errp)
+{
+    wchar_t tmp[MAX_COMPUTERNAME_LENGTH + 1];
+    DWORD size = G_N_ELEMENTS(tmp);
+
+    if (GetComputerNameW(tmp, &size) == 0) {
+        error_setg_win32(errp, GetLastError(), "failed close handle");
+        return NULL;
+    }
+
+    return g_utf16_to_utf8(tmp, size, NULL, NULL, NULL);
+}
+
+size_t qemu_get_host_physmem(void)
+{
+    MEMORYSTATUSEX statex;
+    statex.dwLength = sizeof(statex);
+
+    if (GlobalMemoryStatusEx(&statex)) {
+        return statex.ullTotalPhys;
+    }
+    return 0;
 }

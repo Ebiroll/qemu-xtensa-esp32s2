@@ -165,7 +165,21 @@ static void luring_process_completions(LuringState *s)
         total_bytes = ret + luringcb->total_read;
 
         if (ret < 0) {
-            if (ret == -EINTR) {
+            /*
+             * Only writev/readv/fsync requests on regular files or host block
+             * devices are submitted. Therefore -EAGAIN is not expected but it's
+             * known to happen sometimes with Linux SCSI. Submit again and hope
+             * the request completes successfully.
+             *
+             * For more information, see:
+             * https://lore.kernel.org/io-uring/20210727165811.284510-3-axboe@kernel.dk/T/#u
+             *
+             * If the code is changed to submit other types of requests in the
+             * future, then this workaround may need to be extended to deal with
+             * genuine -EAGAIN results that should not be resubmitted
+             * immediately.
+             */
+            if (ret == -EINTR || ret == -EAGAIN) {
                 luring_resubmit(s, luringcb);
                 continue;
             }
@@ -231,7 +245,7 @@ static int ioq_submit(LuringState *s)
         trace_luring_io_uring_submit(s, ret);
         /* Prevent infinite loop if submission is refused */
         if (ret <= 0) {
-            if (ret == -EAGAIN) {
+            if (ret == -EAGAIN || ret == -EINTR) {
                 continue;
             }
             break;
@@ -277,13 +291,10 @@ static void qemu_luring_completion_cb(void *opaque)
 static bool qemu_luring_poll_cb(void *opaque)
 {
     LuringState *s = opaque;
-    struct io_uring_cqe *cqes;
 
-    if (io_uring_peek_cqe(&s->ring, &cqes) == 0) {
-        if (cqes) {
-            luring_process_completions_and_submit(s);
-            return true;
-        }
+    if (io_uring_cq_ready(&s->ring)) {
+        luring_process_completions_and_submit(s);
+        return true;
     }
 
     return false;
@@ -428,6 +439,6 @@ LuringState *luring_init(Error **errp)
 void luring_cleanup(LuringState *s)
 {
     io_uring_queue_exit(&s->ring);
-    g_free(s);
     trace_luring_cleanup_state(s);
+    g_free(s);
 }

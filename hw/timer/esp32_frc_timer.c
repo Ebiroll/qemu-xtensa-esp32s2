@@ -206,7 +206,7 @@ static void esp32_frc_timer_init(Object *obj)
                         NULL,
                         esp32_frc_timer_set_apb_freq,
                         NULL,
-                        obj, &error_abort);
+                        obj);
 
 
     timer_init_ns(&s->alarm_timer, QEMU_CLOCK_VIRTUAL, esp32_frc_timer_cb, s);

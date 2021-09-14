@@ -40,6 +40,7 @@
 #include "qemu/module.h"
 #include "net/eth.h"
 #include "trace.h"
+#include "qom/object.h"
 
 /* RECSMALL is not used because it breaks tap networking in linux:
  * incoming ARP responses are too short
@@ -56,10 +57,19 @@
 #define SET_REGFIELD(s, reg, field, data) \
     SET_FIELD((s)->regs[reg], reg ## _ ## field, data)
 
-/* PHY MII registers */
+/* DP83848C PHY MII registers.
+ * Registers 0x0-0xf are standard, 0x10-0x1d are vendor-specific.
+ */
 enum {
-    MII_REG_MAX = 16,
+    MII_PHYSTS = 0x10,
+    MII_REG_MAX = 0x1e
 };
+
+/* DP83848C PHYSTS register bits */
+#define MII_PHYSTS_LINK     (1 << 0)
+#define MII_PHYSTS_SPEED    (1 << 1)
+#define MII_PHYSTS_DUPLEX   (1 << 2)
+#define MII_PHYSTS_ANC      (1 << 4)  /* auto-negotiation complete */
 
 typedef struct Mii {
     uint16_t regs[MII_REG_MAX];
@@ -72,9 +82,12 @@ static void mii_set_link(Mii *s, bool link_ok)
         s->regs[MII_BMSR] |= MII_BMSR_LINK_ST;
         s->regs[MII_ANLPAR] |= MII_ANLPAR_TXFD | MII_ANLPAR_TX |
             MII_ANLPAR_10FD | MII_ANLPAR_10 | MII_ANLPAR_CSMACD;
+        s->regs[MII_PHYSTS] = MII_PHYSTS_LINK | MII_PHYSTS_SPEED |
+            MII_PHYSTS_DUPLEX | MII_PHYSTS_ANC;
     } else {
         s->regs[MII_BMSR] &= ~MII_BMSR_LINK_ST;
         s->regs[MII_ANLPAR] &= 0x01ff;
+        s->regs[MII_PHYSTS] = 0;
     }
     s->link_ok = link_ok;
 }
@@ -113,6 +126,7 @@ static void mii_write_host(Mii *s, unsigned idx, uint16_t v)
         [MII_BMSR] = mii_ro,
         [MII_PHYID1] = mii_ro,
         [MII_PHYID2] = mii_ro,
+        [MII_PHYSTS] = mii_ro,
     };
 
     if (idx < MII_REG_MAX) {
@@ -127,8 +141,11 @@ static void mii_write_host(Mii *s, unsigned idx, uint16_t v)
 
 static uint16_t mii_read_host(Mii *s, unsigned idx)
 {
-    trace_open_eth_mii_read(idx, s->regs[idx]);
-    return s->regs[idx];
+    if (idx < MII_REG_MAX) {
+        trace_open_eth_mii_read(idx, s->regs[idx]);
+        return s->regs[idx];
+    }
+    return 0;
 }
 
 /* OpenCores Ethernet registers */
@@ -271,9 +288,9 @@ typedef struct desc {
 #define DEFAULT_PHY 1
 
 #define TYPE_OPEN_ETH "open_eth"
-#define OPEN_ETH(obj) OBJECT_CHECK(OpenEthState, (obj), TYPE_OPEN_ETH)
+OBJECT_DECLARE_SIMPLE_TYPE(OpenEthState, OPEN_ETH)
 
-typedef struct OpenEthState {
+struct OpenEthState {
     SysBusDevice parent_obj;
 
     NICState *nic;
@@ -287,7 +304,7 @@ typedef struct OpenEthState {
     unsigned tx_desc;
     unsigned rx_desc;
     desc desc[128];
-} OpenEthState;
+};
 
 static desc *rx_desc(OpenEthState *s)
 {

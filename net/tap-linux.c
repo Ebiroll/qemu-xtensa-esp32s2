@@ -147,13 +147,15 @@ void tap_set_sndbuf(int fd, const NetdevTapOptions *tap, Error **errp)
     }
 }
 
-int tap_probe_vnet_hdr(int fd)
+int tap_probe_vnet_hdr(int fd, Error **errp)
 {
     struct ifreq ifr;
 
     if (ioctl(fd, TUNGETIFF, &ifr) != 0) {
-        error_report("TUNGETIFF ioctl() failed: %s", strerror(errno));
-        return 0;
+        /* TUNGETIFF is available since kernel v2.6.27 */
+        error_setg_errno(errp, errno,
+                         "Unable to query TUNGETIFF on FD %d", fd);
+        return -1;
     }
 
     return ifr.ifr_flags & IFF_VNET_HDR;
@@ -312,5 +314,18 @@ int tap_fd_get_ifname(int fd, char *ifname)
     }
 
     pstrcpy(ifname, sizeof(ifr.ifr_name), ifr.ifr_name);
+    return 0;
+}
+
+int tap_fd_set_steering_ebpf(int fd, int prog_fd)
+{
+    if (ioctl(fd, TUNSETSTEERINGEBPF, (void *) &prog_fd) != 0) {
+        error_report("Issue while setting TUNSETSTEERINGEBPF:"
+                    " %s with fd: %d, prog_fd: %d",
+                    strerror(errno), fd, prog_fd);
+
+       return -1;
+    }
+
     return 0;
 }

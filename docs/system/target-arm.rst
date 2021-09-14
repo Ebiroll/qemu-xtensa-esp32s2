@@ -67,19 +67,51 @@ Unfortunately many of the Arm boards QEMU supports are currently
 undocumented; you can get a complete list by running
 ``qemu-system-aarch64 --machine help``.
 
+..
+   This table of contents should be kept sorted alphabetically
+   by the title text of each file, which isn't the same ordering
+   as an alphabetical sort by filename.
+
 .. toctree::
    :maxdepth: 1
 
    arm/integratorcp
-   arm/versatile
+   arm/mps2
+   arm/musca
    arm/realview
-   arm/xscale
-   arm/palm
-   arm/nseries
-   arm/stellaris
+   arm/sbsa
+   arm/versatile
+   arm/vexpress
+   arm/aspeed
+   arm/sabrelite
+   arm/digic
+   arm/cubieboard
+   arm/emcraft-sf2
+   arm/highbank
    arm/musicpal
-   arm/sx1
+   arm/gumstix
+   arm/mainstone
+   arm/kzm
+   arm/nrf
+   arm/nseries
+   arm/nuvoton
+   arm/imx25-pdk
    arm/orangepi
+   arm/palm
+   arm/raspi
+   arm/xscale
+   arm/collie
+   arm/sx1
+   arm/stellaris
+   arm/stm32
+   arm/virt
+   arm/xlnx-versal-virt
+
+Emulated CPU architecture support
+=================================
+
+.. toctree::
+   arm/emulation
 
 Arm CPU features
 ================

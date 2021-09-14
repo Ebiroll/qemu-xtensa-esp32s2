@@ -601,7 +601,7 @@ static void aspeed_i2c_bus_write(void *opaque, hwaddr offset,
             break;
         }
 
-        bus->dma_addr = value & 0xfffffffc;
+        bus->dma_addr = value & 0x3ffffffc;
         break;
 
     case I2CD_DMA_LEN:
@@ -816,7 +816,8 @@ static void aspeed_i2c_realize(DeviceState *dev, Error **errp)
             return;
         }
 
-        address_space_init(&s->dram_as, s->dram_mr, "dma-dram");
+        address_space_init(&s->dram_as, s->dram_mr,
+                           TYPE_ASPEED_I2C "-dma-dram");
     }
 }
 
@@ -959,9 +960,8 @@ static void aspeed_i2c_register_types(void)
 type_init(aspeed_i2c_register_types)
 
 
-I2CBus *aspeed_i2c_get_bus(DeviceState *dev, int busnr)
+I2CBus *aspeed_i2c_get_bus(AspeedI2CState *s, int busnr)
 {
-    AspeedI2CState *s = ASPEED_I2C(dev);
     AspeedI2CClass *aic = ASPEED_I2C_GET_CLASS(s);
     I2CBus *bus = NULL;
 

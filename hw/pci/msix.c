@@ -19,6 +19,7 @@
 #include "hw/pci/msix.h"
 #include "hw/pci/pci.h"
 #include "hw/xen/xen.h"
+#include "sysemu/xen.h"
 #include "migration/qemu-file-types.h"
 #include "migration/vmstate.h"
 #include "qemu/range.h"
@@ -178,6 +179,7 @@ static uint64_t msix_table_mmio_read(void *opaque, hwaddr addr,
 {
     PCIDevice *dev = opaque;
 
+    assert(addr + size <= dev->msix_entries_nr * PCI_MSIX_ENTRY_SIZE);
     return pci_get_long(dev->msix_table + addr);
 }
 
@@ -187,6 +189,8 @@ static void msix_table_mmio_write(void *opaque, hwaddr addr,
     PCIDevice *dev = opaque;
     int vector = addr / PCI_MSIX_ENTRY_SIZE;
     bool was_masked;
+
+    assert(addr + size <= dev->msix_entries_nr * PCI_MSIX_ENTRY_SIZE);
 
     was_masked = msix_is_masked(dev, vector);
     pci_set_long(dev->msix_table + addr, val);
@@ -199,6 +203,9 @@ static const MemoryRegionOps msix_table_mmio_ops = {
     .endianness = DEVICE_LITTLE_ENDIAN,
     .valid = {
         .min_access_size = 4,
+        .max_access_size = 8,
+    },
+    .impl = {
         .max_access_size = 4,
     },
 };
@@ -227,6 +234,9 @@ static const MemoryRegionOps msix_pba_mmio_ops = {
     .endianness = DEVICE_LITTLE_ENDIAN,
     .valid = {
         .min_access_size = 4,
+        .max_access_size = 8,
+    },
+    .impl = {
         .max_access_size = 4,
     },
 };
@@ -624,7 +634,7 @@ void msix_unset_vector_notifiers(PCIDevice *dev)
 }
 
 static int put_msix_state(QEMUFile *f, void *pv, size_t size,
-                          const VMStateField *field, QJSON *vmdesc)
+                          const VMStateField *field, JSONWriter *vmdesc)
 {
     msix_save(pv, f);
 

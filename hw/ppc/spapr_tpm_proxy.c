@@ -15,7 +15,6 @@
 #include "qapi/error.h"
 #include "qemu/error-report.h"
 #include "sysemu/reset.h"
-#include "cpu.h"
 #include "hw/ppc/spapr.h"
 #include "hw/qdev-properties.h"
 #include "trace.h"
@@ -140,7 +139,7 @@ static void spapr_tpm_proxy_realize(DeviceState *d, Error **errp)
     qemu_register_reset(spapr_tpm_proxy_reset, tpm_proxy);
 }
 
-static void spapr_tpm_proxy_unrealize(DeviceState *d, Error **errp)
+static void spapr_tpm_proxy_unrealize(DeviceState *d)
 {
     SpaprTpmProxy *tpm_proxy = SPAPR_TPM_PROXY(d);
 

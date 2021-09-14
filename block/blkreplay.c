@@ -23,15 +23,14 @@ typedef struct Request {
 static int blkreplay_open(BlockDriverState *bs, QDict *options, int flags,
                           Error **errp)
 {
-    Error *local_err = NULL;
     int ret;
 
     /* Open the image file */
-    bs->file = bdrv_open_child(NULL, options, "image",
-                               bs, &child_file, false, &local_err);
-    if (local_err) {
+    bs->file = bdrv_open_child(NULL, options, "image", bs, &child_of_bds,
+                               BDRV_CHILD_FILTERED | BDRV_CHILD_PRIMARY,
+                               false, errp);
+    if (!bs->file) {
         ret = -EINVAL;
-        error_propagate(errp, local_err);
         goto fail;
     }
 
@@ -135,9 +134,10 @@ static int blkreplay_snapshot_goto(BlockDriverState *bs,
 static BlockDriver bdrv_blkreplay = {
     .format_name            = "blkreplay",
     .instance_size          = 0,
+    .is_filter              = true,
 
     .bdrv_open              = blkreplay_open,
-    .bdrv_child_perm        = bdrv_filter_default_perms,
+    .bdrv_child_perm        = bdrv_default_perms,
     .bdrv_getlength         = blkreplay_getlength,
 
     .bdrv_co_preadv         = blkreplay_co_preadv,

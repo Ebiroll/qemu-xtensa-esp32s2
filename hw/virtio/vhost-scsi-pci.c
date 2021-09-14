@@ -22,6 +22,7 @@
 #include "qapi/error.h"
 #include "qemu/module.h"
 #include "virtio-pci.h"
+#include "qom/object.h"
 
 typedef struct VHostSCSIPCI VHostSCSIPCI;
 
@@ -29,8 +30,8 @@ typedef struct VHostSCSIPCI VHostSCSIPCI;
  * vhost-scsi-pci: This extends VirtioPCIProxy.
  */
 #define TYPE_VHOST_SCSI_PCI "vhost-scsi-pci-base"
-#define VHOST_SCSI_PCI(obj) \
-        OBJECT_CHECK(VHostSCSIPCI, (obj), TYPE_VHOST_SCSI_PCI)
+DECLARE_INSTANCE_CHECKER(VHostSCSIPCI, VHOST_SCSI_PCI,
+                         TYPE_VHOST_SCSI_PCI)
 
 struct VHostSCSIPCI {
     VirtIOPCIProxy parent_obj;
@@ -47,14 +48,18 @@ static void vhost_scsi_pci_realize(VirtIOPCIProxy *vpci_dev, Error **errp)
 {
     VHostSCSIPCI *dev = VHOST_SCSI_PCI(vpci_dev);
     DeviceState *vdev = DEVICE(&dev->vdev);
-    VirtIOSCSICommon *vs = VIRTIO_SCSI_COMMON(vdev);
+    VirtIOSCSIConf *conf = &dev->vdev.parent_obj.parent_obj.conf;
 
-    if (vpci_dev->nvectors == DEV_NVECTORS_UNSPECIFIED) {
-        vpci_dev->nvectors = vs->conf.num_queues + 3;
+    if (conf->num_queues == VIRTIO_SCSI_AUTO_NUM_QUEUES) {
+        conf->num_queues =
+            virtio_pci_optimal_num_queues(VIRTIO_SCSI_VQ_NUM_FIXED);
     }
 
-    qdev_set_parent_bus(vdev, BUS(&vpci_dev->bus));
-    object_property_set_bool(OBJECT(vdev), true, "realized", errp);
+    if (vpci_dev->nvectors == DEV_NVECTORS_UNSPECIFIED) {
+        vpci_dev->nvectors = conf->num_queues + VIRTIO_SCSI_VQ_NUM_FIXED + 1;
+    }
+
+    qdev_realize(vdev, BUS(&vpci_dev->bus), errp);
 }
 
 static void vhost_scsi_pci_class_init(ObjectClass *klass, void *data)
@@ -78,7 +83,7 @@ static void vhost_scsi_pci_instance_init(Object *obj)
     virtio_instance_init_common(obj, &dev->vdev, sizeof(dev->vdev),
                                 TYPE_VHOST_SCSI);
     object_property_add_alias(obj, "bootindex", OBJECT(&dev->vdev),
-                              "bootindex", &error_abort);
+                              "bootindex");
 }
 
 static const VirtioPCIDeviceTypeInfo vhost_scsi_pci_info = {

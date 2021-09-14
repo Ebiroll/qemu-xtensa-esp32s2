@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# group: rw quick
 #
 # Test commit job graph modifications while requests are active
 #
@@ -23,7 +24,7 @@
 import iotests
 from iotests import imgfmt
 
-iotests.verify_image_format(supported_fmts=['qcow2'])
+iotests.script_initialize(supported_fmts=['qcow2'])
 
 iotests.log('Finishing a commit job with background reads')
 iotests.log('============================================')

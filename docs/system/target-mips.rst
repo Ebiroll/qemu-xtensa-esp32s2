@@ -74,7 +74,7 @@ The MIPS Magnum R4000 emulation supports:
 
 -  G364 framebuffer
 
-The Fulong 2E emulation supports:
+The Fuloong 2E emulation supports:
 
 -  Loongson 2E CPU
 
@@ -83,6 +83,16 @@ The Fulong 2E emulation supports:
 -  VT82C686 chipset as South Bridge
 
 -  RTL8139D as a network card chipset
+
+The Loongson-3 virtual platform emulation supports:
+
+-  Loongson 3A CPU
+
+-  LIOINTC as interrupt controller
+
+-  GPEX and virtio as peripheral devices
+
+-  Both KVM and TCG supported
 
 The mipssim pseudo board emulation provides an environment similar to
 what the proprietary MIPS emulator uses for running Linux. It supports:

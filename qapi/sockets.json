@@ -1,4 +1,5 @@
 # -*- Mode: Python -*-
+# vim: filetype=python
 
 ##
 # = Socket data types
@@ -56,6 +57,8 @@
 # @keep-alive: enable keep-alive when connecting to this socket. Not supported
 #              for passive sockets. (Since 4.2)
 #
+# @mptcp: enable multi-path TCP. (Since 6.1)
+#
 # Since: 1.3
 ##
 { 'struct': 'InetSocketAddress',
@@ -65,7 +68,8 @@
     '*to': 'uint16',
     '*ipv4': 'bool',
     '*ipv6': 'bool',
-    '*keep-alive': 'bool' } }
+    '*keep-alive': 'bool',
+    '*mptcp': { 'type': 'bool', 'if': 'defined(IPPROTO_MPTCP)' } } }
 
 ##
 # @UnixSocketAddress:
@@ -73,12 +77,20 @@
 # Captures a socket address in the local ("Unix socket") namespace.
 #
 # @path: filesystem path to use
+# @abstract: if true, this is a Linux abstract socket address.  @path
+#            will be prefixed by a null byte, and optionally padded
+#            with null bytes.  Defaults to false.  (Since 5.1)
+# @tight: if false, pad an abstract socket address with enough null
+#         bytes to make it fill struct sockaddr_un member sun_path.
+#         Defaults to true.  (Since 5.1)
 #
 # Since: 1.3
 ##
 { 'struct': 'UnixSocketAddress',
   'data': {
-    'path': 'str' } }
+    'path': 'str',
+    '*abstract': { 'type': 'bool', 'if': 'defined(CONFIG_LINUX)' },
+    '*tight': { 'type': 'bool', 'if': 'defined(CONFIG_LINUX)' } } }
 
 ##
 # @VsockSocketAddress:

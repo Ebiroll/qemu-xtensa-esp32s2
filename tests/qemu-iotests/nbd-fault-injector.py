@@ -47,10 +47,7 @@ import sys
 import socket
 import struct
 import collections
-if sys.version_info.major >= 3:
-    import configparser
-else:
-    import ConfigParser as configparser
+import configparser
 
 FAKE_DISK_SIZE = 8 * 1024 * 1024 * 1024 # 8 GB
 
@@ -230,7 +227,7 @@ def parse_config(config):
 def load_rules(filename):
     config = configparser.RawConfigParser()
     with open(filename, 'rt') as f:
-        config.readfp(f, filename)
+        config.read_file(f, filename)
     return parse_config(config)
 
 def open_socket(path):

@@ -17,12 +17,13 @@
 #include "cpu.h"
 #include "sysemu/memory_mapping.h"
 #include "migration/vmstate.h"
+#include "hw/acpi/tpm.h"
 #include "tpm_ppi.h"
 #include "trace.h"
 
 void tpm_ppi_reset(TPMPPI *tpmppi)
 {
-    if (tpmppi->buf[0x15a /* movv, docs/specs/tpm.txt */] & 0x1) {
+    if (tpmppi->buf[0x15a /* movv, docs/specs/tpm.rst */] & 0x1) {
         GuestPhysBlockList guest_phys_blocks;
         GuestPhysBlock *block;
 

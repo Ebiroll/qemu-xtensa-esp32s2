@@ -40,6 +40,17 @@ class TestBreakpoint(gdb.Breakpoint):
         except gdb.error:
             report(False, "checking zregs (out of range)")
 
+        # Check the aliased V registers are set and GDB has correctly
+        # created them for us having recognised and handled SVE.
+        try:
+            for i in range(0, 16):
+                val_z = gdb.parse_and_eval("$z0.b.u[%d]" % i)
+                val_v = gdb.parse_and_eval("$v0.b.u[%d]" % i)
+                report(int(val_z) == int(val_v),
+                       "v0.b.u[%d] == z0.b.u[%d]" % (i, i))
+        except gdb.error:
+            report(False, "checking vregs (out of range)")
+
 
 def run_test():
     "Run through the tests one by one"
@@ -58,9 +69,6 @@ def run_test():
 #
 try:
     inferior = gdb.selected_inferior()
-    if inferior.was_attached == False:
-        print("SKIPPING (failed to attach)", file=sys.stderr)
-        exit(0)
     arch = inferior.architecture()
     report(arch.name() == "aarch64", "connected to aarch64")
 except (gdb.error, AttributeError):
@@ -70,7 +78,6 @@ except (gdb.error, AttributeError):
 try:
     # These are not very useful in scripts
     gdb.execute("set pagination off")
-    gdb.execute("set confirm off")
 
     # Run the actual tests
     run_test()

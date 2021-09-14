@@ -24,7 +24,6 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
-#include "cpu.h"
 
 #include "hw/sysbus.h"
 #include "hw/char/serial.h"
@@ -52,7 +51,7 @@ static void nios2_10m50_ghrd_init(MachineState *machine)
     ram_addr_t tcm_size = 0x1000;    /* 1 kiB, but QEMU limit is 4 kiB */
     ram_addr_t ram_base = 0x08000000;
     ram_addr_t ram_size = 0x08000000;
-    qemu_irq *cpu_irq, irq[32];
+    qemu_irq irq[32];
     int i;
 
     /* Physical TCM (tb_ram_1k) with alias at 0xc0000000 */
@@ -75,18 +74,8 @@ static void nios2_10m50_ghrd_init(MachineState *machine)
 
     /* Create CPU -- FIXME */
     cpu = NIOS2_CPU(cpu_create(TYPE_NIOS2_CPU));
-
-    /* Register: CPU interrupt controller (PIC) */
-    cpu_irq = nios2_cpu_pic_init(cpu);
-
-    /* Register: Internal Interrupt Controller (IIC) */
-    dev = qdev_create(NULL, "altera,iic");
-    object_property_add_const_link(OBJECT(dev), "cpu", OBJECT(cpu),
-                                   &error_abort);
-    qdev_init_nofail(dev);
-    sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0, cpu_irq[0]);
     for (i = 0; i < 32; i++) {
-        irq[i] = qdev_get_gpio_in(dev, i);
+        irq[i] = qdev_get_gpio_in_named(DEVICE(cpu), "IRQ", i);
     }
 
     /* Register: Altera 16550 UART */
@@ -94,16 +83,16 @@ static void nios2_10m50_ghrd_init(MachineState *machine)
                    serial_hd(0), DEVICE_NATIVE_ENDIAN);
 
     /* Register: Timer sys_clk_timer  */
-    dev = qdev_create(NULL, "ALTR.timer");
+    dev = qdev_new("ALTR.timer");
     qdev_prop_set_uint32(dev, "clock-frequency", 75 * 1000000);
-    qdev_init_nofail(dev);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, 0xf8001440);
     sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0, irq[0]);
 
     /* Register: Timer sys_clk_timer_1  */
-    dev = qdev_create(NULL, "ALTR.timer");
+    dev = qdev_new("ALTR.timer");
     qdev_prop_set_uint32(dev, "clock-frequency", 75 * 1000000);
-    qdev_init_nofail(dev);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, 0xe0000880);
     sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0, irq[5]);
 

@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -23,15 +23,15 @@
 #include "qemu/module.h"
 #include "qapi/error.h"
 
-void qbus_set_hotplug_handler(BusState *bus, Object *handler, Error **errp)
+void qbus_set_hotplug_handler(BusState *bus, Object *handler)
 {
-    object_property_set_link(OBJECT(bus), OBJECT(handler),
-                             QDEV_HOTPLUG_HANDLER_PROPERTY, errp);
+    object_property_set_link(OBJECT(bus), QDEV_HOTPLUG_HANDLER_PROPERTY,
+                             handler, &error_abort);
 }
 
-void qbus_set_bus_hotplug_handler(BusState *bus, Error **errp)
+void qbus_set_bus_hotplug_handler(BusState *bus)
 {
-    qbus_set_hotplug_handler(bus, OBJECT(bus), errp);
+    qbus_set_hotplug_handler(bus, OBJECT(bus));
 }
 
 int qbus_walk_children(BusState *bus,
@@ -49,12 +49,14 @@ int qbus_walk_children(BusState *bus,
         }
     }
 
-    QTAILQ_FOREACH(kid, &bus->children, sibling) {
-        err = qdev_walk_children(kid->child,
-                                 pre_devfn, pre_busfn,
-                                 post_devfn, post_busfn, opaque);
-        if (err < 0) {
-            return err;
+    WITH_RCU_READ_LOCK_GUARD() {
+        QTAILQ_FOREACH_RCU(kid, &bus->children, sibling) {
+            err = qdev_walk_children(kid->child,
+                                     pre_devfn, pre_busfn,
+                                     post_devfn, post_busfn, opaque);
+            if (err < 0) {
+                return err;
+            }
         }
     }
 
@@ -90,12 +92,14 @@ static void bus_reset_child_foreach(Object *obj, ResettableChildCallback cb,
     BusState *bus = BUS(obj);
     BusChild *kid;
 
-    QTAILQ_FOREACH(kid, &bus->children, sibling) {
-        cb(OBJECT(kid->child), opaque, type);
+    WITH_RCU_READ_LOCK_GUARD() {
+        QTAILQ_FOREACH_RCU(kid, &bus->children, sibling) {
+            cb(OBJECT(kid->child), opaque, type);
+        }
     }
 }
 
-static void qbus_realize(BusState *bus, DeviceState *parent, const char *name)
+static void qbus_init(BusState *bus, DeviceState *parent, const char *name)
 {
     const char *typename = object_get_typename(OBJECT(bus));
     BusClass *bc;
@@ -122,7 +126,7 @@ static void qbus_realize(BusState *bus, DeviceState *parent, const char *name)
     if (bus->parent) {
         QLIST_INSERT_HEAD(&bus->parent->child_bus, bus, sibling);
         bus->parent->num_child_bus++;
-        object_property_add_child(OBJECT(bus->parent), bus->name, OBJECT(bus), NULL);
+        object_property_add_child(OBJECT(bus->parent), bus->name, OBJECT(bus));
         object_unref(OBJECT(bus));
     } else {
         /* The only bus without a parent is the main system bus */
@@ -151,7 +155,7 @@ void qbus_create_inplace(void *bus, size_t size, const char *typename,
                          DeviceState *parent, const char *name)
 {
     object_initialize(bus, size, typename);
-    qbus_realize(bus, parent, name);
+    qbus_init(bus, parent, name);
 }
 
 BusState *qbus_create(const char *typename, DeviceState *parent, const char *name)
@@ -159,9 +163,19 @@ BusState *qbus_create(const char *typename, DeviceState *parent, const char *nam
     BusState *bus;
 
     bus = BUS(object_new(typename));
-    qbus_realize(bus, parent, name);
+    qbus_init(bus, parent, name);
 
     return bus;
+}
+
+bool qbus_realize(BusState *bus, Error **errp)
+{
+    return object_property_set_bool(OBJECT(bus), "realized", true, errp);
+}
+
+void qbus_unrealize(BusState *bus)
+{
+    object_property_set_bool(OBJECT(bus), "realized", false, &error_abort);
 }
 
 static bool bus_get_realized(Object *obj, Error **errp)
@@ -176,31 +190,23 @@ static void bus_set_realized(Object *obj, bool value, Error **errp)
     BusState *bus = BUS(obj);
     BusClass *bc = BUS_GET_CLASS(bus);
     BusChild *kid;
-    Error *local_err = NULL;
 
     if (value && !bus->realized) {
         if (bc->realize) {
-            bc->realize(bus, &local_err);
+            bc->realize(bus, errp);
         }
 
         /* TODO: recursive realization */
     } else if (!value && bus->realized) {
-        QTAILQ_FOREACH(kid, &bus->children, sibling) {
-            DeviceState *dev = kid->child;
-            object_property_set_bool(OBJECT(dev), false, "realized",
-                                     &local_err);
-            if (local_err != NULL) {
-                break;
+        WITH_RCU_READ_LOCK_GUARD() {
+            QTAILQ_FOREACH_RCU(kid, &bus->children, sibling) {
+                DeviceState *dev = kid->child;
+                qdev_unrealize(dev);
             }
         }
-        if (bc->unrealize && local_err == NULL) {
-            bc->unrealize(bus, &local_err);
+        if (bc->unrealize) {
+            bc->unrealize(bus);
         }
-    }
-
-    if (local_err != NULL) {
-        error_propagate(errp, local_err);
-        return;
     }
 
     bus->realized = value;
@@ -215,10 +221,9 @@ static void qbus_initfn(Object *obj)
                              TYPE_HOTPLUG_HANDLER,
                              (Object **)&bus->hotplug_handler,
                              object_property_allow_set_link,
-                             0,
-                             NULL);
+                             0);
     object_property_add_bool(obj, "realized",
-                             bus_get_realized, bus_set_realized, NULL);
+                             bus_get_realized, bus_set_realized);
 }
 
 static char *default_bus_get_fw_dev_path(DeviceState *dev)

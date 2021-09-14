@@ -38,6 +38,8 @@ REG32(EFUSE_DATE, 0x1fc)
 #define EFUSE_READ_OP_CODE 0x5AA5
 #define EFUSE_PGM_OP_CODE 0x5A5A
 
+#define ESP32_EFUSE_UPDATE_GPIO "efuse-update"
+
 
 typedef struct Esp32EfuseRegs {
     union {
@@ -103,6 +105,7 @@ typedef struct Esp32EfuseState {
     qemu_irq irq;
     BlockBackend *blk;
     QEMUTimer op_timer;
+    qemu_irq efuse_update_gpio;
 
     Esp32EfuseRegs efuse_wr;
     Esp32EfuseRegs efuse_wr_dis;
@@ -119,3 +122,10 @@ typedef struct Esp32EfuseState {
     uint32_t dac_conf_reg;
 } Esp32EfuseState;
 
+/* returns NULL unless there is exactly one device */
+static inline Esp32EfuseState *esp32_efuse_find(void)
+{
+    Object *o = object_resolve_path_type("", TYPE_ESP32_EFUSE, NULL);
+
+    return o ? ESP32_EFUSE(o) : NULL;
+}

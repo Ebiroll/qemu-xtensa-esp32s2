@@ -9,15 +9,16 @@
 #ifndef HW_RTC_MC146818RTC_H
 #define HW_RTC_MC146818RTC_H
 
-#include "qapi/qapi-types-misc.h"
+#include "qapi/qapi-types-machine.h"
 #include "qemu/queue.h"
 #include "qemu/timer.h"
 #include "hw/isa/isa.h"
+#include "qom/object.h"
 
 #define TYPE_MC146818_RTC "mc146818rtc"
-#define MC146818_RTC(obj) OBJECT_CHECK(RTCState, (obj), TYPE_MC146818_RTC)
+OBJECT_DECLARE_SIMPLE_TYPE(RTCState, MC146818_RTC)
 
-typedef struct RTCState {
+struct RTCState {
     ISADevice parent_obj;
 
     MemoryRegion io;
@@ -44,9 +45,10 @@ typedef struct RTCState {
     LostTickPolicy lost_tick_policy;
     Notifier suspend_notifier;
     QLIST_ENTRY(RTCState) link;
-} RTCState;
+};
 
 #define RTC_ISA_IRQ 8
+#define RTC_ISA_BASE 0x70
 
 ISADevice *mc146818_rtc_init(ISABus *bus, int base_year,
                              qemu_irq intercept_irq);

@@ -1,4 +1,5 @@
 # -*- Mode: Python -*-
+# vim: filetype=python
 #
 # This work is licensed under the terms of the GNU GPL, version 2 or later.
 # See the COPYING file in the top-level directory.
@@ -16,7 +17,7 @@
 # @name: the name of the CPU definition the model is based on
 # @props: a dictionary of QOM properties to be applied
 #
-# Since: 2.8.0
+# Since: 2.8
 ##
 { 'struct': 'CpuModelInfo',
   'data': { 'name': 'str',
@@ -48,7 +49,7 @@
 #       version or machine-type, use @static (but keep in mind that some features may
 #       be omitted).
 #
-# Since: 2.8.0
+# Since: 2.8
 ##
 { 'enum': 'CpuModelExpansionType',
   'data': [ 'static', 'full' ] }
@@ -72,7 +73,7 @@
 # @subset: If model A is a subset of model B, model A is guaranteed to run
 #          where model B runs. There are no guarantees about the other way.
 #
-# Since: 2.8.0
+# Since: 2.8
 ##
 { 'enum': 'CpuModelCompareResult',
   'data': [ 'incompatible', 'identical', 'superset', 'subset' ] }
@@ -84,7 +85,7 @@
 #
 # @model: the baselined CpuModelInfo.
 #
-# Since: 2.8.0
+# Since: 2.8
 ##
 { 'struct': 'CpuModelBaselineInfo',
   'data': { 'model': 'CpuModelInfo' },
@@ -106,7 +107,7 @@
 # CPU models identical. If the special property name "type" is included, the
 # models are by definition not identical and cannot be made identical.
 #
-# Since: 2.8.0
+# Since: 2.8
 ##
 { 'struct': 'CpuModelCompareInfo',
   'data': { 'result': 'CpuModelCompareResult',
@@ -150,7 +151,7 @@
 # Note: this command isn't specific to s390x, but is only implemented
 #       on this architecture currently.
 #
-# Since: 2.8.0
+# Since: 2.8
 ##
 { 'command': 'query-cpu-model-comparison',
   'data': { 'modela': 'CpuModelInfo', 'modelb': 'CpuModelInfo' },
@@ -193,7 +194,7 @@
 # Note: this command isn't specific to s390x, but is only implemented
 #       on this architecture currently.
 #
-# Since: 2.8.0
+# Since: 2.8
 ##
 { 'command': 'query-cpu-model-baseline',
   'data': { 'modela': 'CpuModelInfo',
@@ -208,7 +209,7 @@
 #
 # @model: the expanded CpuModelInfo.
 #
-# Since: 2.8.0
+# Since: 2.8
 ##
 { 'struct': 'CpuModelExpansionInfo',
   'data': { 'model': 'CpuModelInfo' },
@@ -245,7 +246,7 @@
 #          with a wrong type. Also returns an error if an expansion type is
 #          not supported.
 #
-# Since: 2.8.0
+# Since: 2.8
 ##
 { 'command': 'query-cpu-model-expansion',
   'data': { 'type': 'CpuModelExpansionType',
@@ -285,6 +286,10 @@
 #            in the VM configuration, because aliases may stop being
 #            migration-safe in the future (since 4.1)
 #
+# @deprecated: If true, this CPU model is deprecated and may be removed in
+#              in some future version of QEMU according to the QEMU deprecation
+#              policy. (since 5.2)
+#
 # @unavailable-features is a list of QOM property names that
 # represent CPU model attributes that prevent the CPU from running.
 # If the QOM property is read-only, that means there's no known
@@ -301,7 +306,7 @@
 # If @unavailable-features is not present, runnability
 # information for the CPU is not available.
 #
-# Since: 1.2.0
+# Since: 1.2
 ##
 { 'struct': 'CpuDefinitionInfo',
   'data': { 'name': 'str',
@@ -309,7 +314,8 @@
             'static': 'bool',
             '*unavailable-features': [ 'str' ],
             'typename': 'str',
-            '*alias-of' : 'str' },
+            '*alias-of' : 'str',
+            'deprecated' : 'bool' },
   'if': 'defined(TARGET_PPC) || defined(TARGET_ARM) || defined(TARGET_I386) || defined(TARGET_S390X) || defined(TARGET_MIPS)' }
 
 ##
@@ -319,7 +325,7 @@
 #
 # Returns: a list of CpuDefInfo
 #
-# Since: 1.2.0
+# Since: 1.2
 ##
 { 'command': 'query-cpu-definitions', 'returns': ['CpuDefinitionInfo'],
   'if': 'defined(TARGET_PPC) || defined(TARGET_ARM) || defined(TARGET_I386) || defined(TARGET_S390X) || defined(TARGET_MIPS)' }

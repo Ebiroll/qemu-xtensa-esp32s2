@@ -15,12 +15,14 @@
 #include "sysemu/kvm.h"
 #include "qemu/bitops.h"
 #include "qemu/error-report.h"
+#include "qemu/lockable.h"
 #include "qemu/queue.h"
 #include "qemu/rcu.h"
 #include "qemu/rcu_queue.h"
 #include "hw/hyperv/hyperv.h"
+#include "qom/object.h"
 
-typedef struct SynICState {
+struct SynICState {
     DeviceState parent_obj;
 
     CPUState *cs;
@@ -32,10 +34,17 @@ typedef struct SynICState {
     MemoryRegion event_page_mr;
     struct hyperv_message_page *msg_page;
     struct hyperv_event_flags_page *event_page;
-} SynICState;
+};
 
 #define TYPE_SYNIC "hyperv-synic"
-#define SYNIC(obj) OBJECT_CHECK(SynICState, (obj), TYPE_SYNIC)
+OBJECT_DECLARE_SIMPLE_TYPE(SynICState, SYNIC)
+
+static bool synic_enabled;
+
+bool hyperv_is_synic_enabled(void)
+{
+    return synic_enabled;
+}
 
 static SynICState *get_synic(CPUState *cs)
 {
@@ -130,9 +139,10 @@ void hyperv_synic_add(CPUState *cs)
     obj = object_new(TYPE_SYNIC);
     synic = SYNIC(obj);
     synic->cs = cs;
-    object_property_add_child(OBJECT(cs), "synic", obj, &error_abort);
+    object_property_add_child(OBJECT(cs), "synic", obj);
     object_unref(obj);
-    object_property_set_bool(obj, true, "realized", &error_abort);
+    qdev_realize(DEVICE(obj), NULL, &error_abort);
+    synic_enabled = true;
 }
 
 void hyperv_synic_reset(CPUState *cs)
@@ -221,7 +231,7 @@ static void sint_msg_bh(void *opaque)
     HvSintRoute *sint_route = opaque;
     HvSintStagedMessage *staged_msg = sint_route->staged_msg;
 
-    if (atomic_read(&staged_msg->state) != HV_STAGED_MSG_POSTED) {
+    if (qatomic_read(&staged_msg->state) != HV_STAGED_MSG_POSTED) {
         /* status nor ready yet (spurious ack from guest?), ignore */
         return;
     }
@@ -230,7 +240,7 @@ static void sint_msg_bh(void *opaque)
     staged_msg->status = 0;
 
     /* staged message processing finished, ready to start over */
-    atomic_set(&staged_msg->state, HV_STAGED_MSG_FREE);
+    qatomic_set(&staged_msg->state, HV_STAGED_MSG_FREE);
     /* drop the reference taken in hyperv_post_msg */
     hyperv_sint_route_unref(sint_route);
 }
@@ -268,7 +278,7 @@ static void cpu_post_msg(CPUState *cs, run_on_cpu_data data)
     memory_region_set_dirty(&synic->msg_page_mr, 0, sizeof(*synic->msg_page));
 
 posted:
-    atomic_set(&staged_msg->state, HV_STAGED_MSG_POSTED);
+    qatomic_set(&staged_msg->state, HV_STAGED_MSG_POSTED);
     /*
      * Notify the msg originator of the progress made; if the slot was busy we
      * set msg_pending flag in it so it will be the guest who will do EOM and
@@ -291,7 +301,7 @@ int hyperv_post_msg(HvSintRoute *sint_route, struct hyperv_message *src_msg)
     assert(staged_msg);
 
     /* grab the staging area */
-    if (atomic_cmpxchg(&staged_msg->state, HV_STAGED_MSG_FREE,
+    if (qatomic_cmpxchg(&staged_msg->state, HV_STAGED_MSG_FREE,
                        HV_STAGED_MSG_BUSY) != HV_STAGED_MSG_FREE) {
         return -EAGAIN;
     }
@@ -341,7 +351,7 @@ int hyperv_set_event_flag(HvSintRoute *sint_route, unsigned eventno)
     set_mask = BIT_MASK(eventno);
     flags = synic->event_page->slot[sint_route->sint].flags;
 
-    if ((atomic_fetch_or(&flags[set_idx], set_mask) & set_mask) != set_mask) {
+    if ((qatomic_fetch_or(&flags[set_idx], set_mask) & set_mask) != set_mask) {
         memory_region_set_dirty(&synic->event_page_mr, 0,
                                 sizeof(*synic->event_page));
         ret = hyperv_sint_route_set_sint(sint_route);
@@ -491,7 +501,7 @@ int hyperv_set_msg_handler(uint32_t conn_id, HvMsgHandler handler, void *data)
     int ret;
     MsgHandler *mh;
 
-    qemu_mutex_lock(&handlers_mutex);
+    QEMU_LOCK_GUARD(&handlers_mutex);
     QLIST_FOREACH(mh, &msg_handlers, link) {
         if (mh->conn_id == conn_id) {
             if (handler) {
@@ -501,7 +511,7 @@ int hyperv_set_msg_handler(uint32_t conn_id, HvMsgHandler handler, void *data)
                 g_free_rcu(mh, rcu);
                 ret = 0;
             }
-            goto unlock;
+            return ret;
         }
     }
 
@@ -515,8 +525,7 @@ int hyperv_set_msg_handler(uint32_t conn_id, HvMsgHandler handler, void *data)
     } else {
         ret = -ENOENT;
     }
-unlock:
-    qemu_mutex_unlock(&handlers_mutex);
+
     return ret;
 }
 
@@ -565,7 +574,7 @@ static int set_event_flag_handler(uint32_t conn_id, EventNotifier *notifier)
     int ret;
     EventFlagHandler *handler;
 
-    qemu_mutex_lock(&handlers_mutex);
+    QEMU_LOCK_GUARD(&handlers_mutex);
     QLIST_FOREACH(handler, &event_flag_handlers, link) {
         if (handler->conn_id == conn_id) {
             if (notifier) {
@@ -575,7 +584,7 @@ static int set_event_flag_handler(uint32_t conn_id, EventNotifier *notifier)
                 g_free_rcu(handler, rcu);
                 ret = 0;
             }
-            goto unlock;
+            return ret;
         }
     }
 
@@ -588,8 +597,7 @@ static int set_event_flag_handler(uint32_t conn_id, EventNotifier *notifier)
     } else {
         ret = -ENOENT;
     }
-unlock:
-    qemu_mutex_unlock(&handlers_mutex);
+
     return ret;
 }
 

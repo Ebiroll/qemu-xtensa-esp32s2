@@ -45,10 +45,10 @@ void s390_skeys_init(void)
         obj = object_new(TYPE_QEMU_S390_SKEYS);
     }
     object_property_add_child(qdev_get_machine(), TYPE_S390_SKEYS,
-                              obj, NULL);
+                              obj);
     object_unref(obj);
 
-    qdev_init_nofail(DEVICE(obj));
+    qdev_realize(DEVICE(obj), NULL, &error_fatal);
 }
 
 static void write_keys(FILE *f, uint8_t *keys, uint64_t startgfn,
@@ -109,7 +109,8 @@ void qmp_dump_skeys(const char *filename, Error **errp)
 {
     S390SKeysState *ss = s390_get_skeys_device();
     S390SKeysClass *skeyclass = S390_SKEYS_GET_CLASS(ss);
-    const uint64_t total_count = ram_size / TARGET_PAGE_SIZE;
+    MachineState *ms = MACHINE(qdev_get_machine());
+    const uint64_t total_count = ms->ram_size / TARGET_PAGE_SIZE;
     uint64_t handled_count = 0, cur_count;
     Error *lerr = NULL;
     vaddr cur_gfn = 0;
@@ -125,7 +126,7 @@ void qmp_dump_skeys(const char *filename, Error **errp)
         return;
     }
 
-    fd = qemu_open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    fd = qemu_open_old(filename, O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (fd < 0) {
         error_setg_file_open(errp, errno, filename);
         return;
@@ -256,7 +257,8 @@ static void s390_storage_keys_save(QEMUFile *f, void *opaque)
 {
     S390SKeysState *ss = S390_SKEYS(opaque);
     S390SKeysClass *skeyclass = S390_SKEYS_GET_CLASS(ss);
-    uint64_t pages_left = ram_size / TARGET_PAGE_SIZE;
+    MachineState *ms = MACHINE(qdev_get_machine());
+    uint64_t pages_left = ms->ram_size / TARGET_PAGE_SIZE;
     uint64_t read_count, eos = S390_SKEYS_SAVE_FLAG_EOS;
     vaddr cur_gfn = 0;
     int error = 0;
@@ -400,8 +402,8 @@ static void s390_skeys_instance_init(Object *obj)
 {
     object_property_add_bool(obj, "migration-enabled",
                              s390_skeys_get_migration_enabled,
-                             s390_skeys_set_migration_enabled, NULL);
-    object_property_set_bool(obj, true, "migration-enabled", NULL);
+                             s390_skeys_set_migration_enabled);
+    object_property_set_bool(obj, "migration-enabled", true, NULL);
 }
 
 static void s390_skeys_class_init(ObjectClass *oc, void *data)

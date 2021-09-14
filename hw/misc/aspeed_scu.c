@@ -328,9 +328,10 @@ static const MemoryRegionOps aspeed_ast2400_scu_ops = {
     .read = aspeed_scu_read,
     .write = aspeed_ast2400_scu_write,
     .endianness = DEVICE_LITTLE_ENDIAN,
-    .valid.min_access_size = 4,
-    .valid.max_access_size = 4,
-    .valid.unaligned = false,
+    .valid = {
+        .min_access_size = 1,
+        .max_access_size = 4,
+    },
 };
 
 static const MemoryRegionOps aspeed_ast2500_scu_ops = {
@@ -431,6 +432,7 @@ static uint32_t aspeed_silicon_revs[] = {
     AST2500_A0_SILICON_REV,
     AST2500_A1_SILICON_REV,
     AST2600_A0_SILICON_REV,
+    AST2600_A1_SILICON_REV,
 };
 
 bool is_supported_silicon_rev(uint32_t silicon_rev)
@@ -649,14 +651,12 @@ static const MemoryRegionOps aspeed_ast2600_scu_ops = {
     .valid.unaligned = false,
 };
 
-static const uint32_t ast2600_a0_resets[ASPEED_AST2600_SCU_NR_REGS] = {
-    [AST2600_SILICON_REV]       = AST2600_SILICON_REV,
-    [AST2600_SILICON_REV2]      = AST2600_SILICON_REV,
-    [AST2600_SYS_RST_CTRL]      = 0xF7CFFEDC | 0x100,
+static const uint32_t ast2600_a1_resets[ASPEED_AST2600_SCU_NR_REGS] = {
+    [AST2600_SYS_RST_CTRL]      = 0xF7C3FED8,
     [AST2600_SYS_RST_CTRL2]     = 0xFFFFFFFC,
-    [AST2600_CLK_STOP_CTRL]     = 0xEFF43E8B,
+    [AST2600_CLK_STOP_CTRL]     = 0xFFFF7F8A,
     [AST2600_CLK_STOP_CTRL2]    = 0xFFF0FFF0,
-    [AST2600_SDRAM_HANDSHAKE]   = 0x00000040,  /* SoC completed DRAM init */
+    [AST2600_SDRAM_HANDSHAKE]   = 0x00000000,
     [AST2600_HPLL_PARAM]        = 0x1000405F,
     [AST2600_CHIP_ID0]          = 0x1234ABCD,
     [AST2600_CHIP_ID1]          = 0x88884444,
@@ -670,7 +670,12 @@ static void aspeed_ast2600_scu_reset(DeviceState *dev)
 
     memcpy(s->regs, asc->resets, asc->nr_regs * 4);
 
-    s->regs[AST2600_SILICON_REV] = s->silicon_rev;
+    /*
+     * A0 reports A0 in _REV, but subsequent revisions report A1 regardless
+     * of actual revision. QEMU and Linux only support A1 onwards so this is
+     * sufficient.
+     */
+    s->regs[AST2600_SILICON_REV] = AST2600_A1_SILICON_REV;
     s->regs[AST2600_SILICON_REV2] = s->silicon_rev;
     s->regs[AST2600_HW_STRAP1] = s->hw_strap1;
     s->regs[AST2600_HW_STRAP2] = s->hw_strap2;
@@ -684,7 +689,7 @@ static void aspeed_2600_scu_class_init(ObjectClass *klass, void *data)
 
     dc->desc = "ASPEED 2600 System Control Unit";
     dc->reset = aspeed_ast2600_scu_reset;
-    asc->resets = ast2600_a0_resets;
+    asc->resets = ast2600_a1_resets;
     asc->calc_hpll = aspeed_2500_scu_calc_hpll; /* No change since AST2500 */
     asc->apb_divider = 4;
     asc->nr_regs = ASPEED_AST2600_SCU_NR_REGS;

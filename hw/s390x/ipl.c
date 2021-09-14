@@ -1,10 +1,11 @@
 /*
  * bootloader support
  *
- * Copyright IBM, Corp. 2012
+ * Copyright IBM, Corp. 2012, 2020
  *
  * Authors:
  *  Christian Borntraeger <borntraeger@de.ibm.com>
+ *  Janosch Frank <frankja@linux.ibm.com>
  *
  * This work is licensed under the terms of the GNU GPL, version 2 or (at your
  * option) any later version.  See the COPYING file in the top-level directory.
@@ -13,12 +14,11 @@
 
 #include "qemu/osdep.h"
 #include "qemu-common.h"
+#include "qemu/datadir.h"
 #include "qapi/error.h"
 #include "sysemu/reset.h"
 #include "sysemu/runstate.h"
-#include "sysemu/sysemu.h"
 #include "sysemu/tcg.h"
-#include "cpu.h"
 #include "elf.h"
 #include "hw/loader.h"
 #include "hw/qdev-properties.h"
@@ -27,6 +27,7 @@
 #include "hw/s390x/vfio-ccw.h"
 #include "hw/s390x/css.h"
 #include "hw/s390x/ebcdic.h"
+#include "hw/s390x/pv.h"
 #include "ipl.h"
 #include "qemu/error-report.h"
 #include "qemu/config-file.h"
@@ -110,12 +111,12 @@ static uint64_t bios_translate_addr(void *opaque, uint64_t srcaddr)
 
 static void s390_ipl_realize(DeviceState *dev, Error **errp)
 {
+    MachineState *ms = MACHINE(qdev_get_machine());
     S390IPLState *ipl = S390_IPL(dev);
     uint32_t *ipl_psw;
     uint64_t pentry;
     char *magic;
     int kernel_size;
-    Error *err = NULL;
 
     int bios_size;
     char *bios_filename;
@@ -125,16 +126,12 @@ static void s390_ipl_realize(DeviceState *dev, Error **errp)
      * even if an external kernel has been defined.
      */
     if (!ipl->kernel || ipl->enforce_bios) {
-        uint64_t fwbase = (MIN(ram_size, 0x80000000U) - 0x200000) & ~0xffffUL;
+        uint64_t fwbase = (MIN(ms->ram_size, 0x80000000U) - 0x200000) & ~0xffffUL;
 
-        if (bios_name == NULL) {
-            bios_name = ipl->firmware;
-        }
-
-        bios_filename = qemu_find_file(QEMU_FILE_TYPE_BIOS, bios_name);
+        bios_filename = qemu_find_file(QEMU_FILE_TYPE_BIOS, ipl->firmware);
         if (bios_filename == NULL) {
-            error_setg(&err, "could not find stage1 bootloader");
-            goto error;
+            error_setg(errp, "could not find stage1 bootloader");
+            return;
         }
 
         bios_size = load_elf(bios_filename, NULL,
@@ -153,8 +150,8 @@ static void s390_ipl_realize(DeviceState *dev, Error **errp)
         g_free(bios_filename);
 
         if (bios_size == -1) {
-            error_setg(&err, "could not load bootloader '%s'", bios_name);
-            goto error;
+            error_setg(errp, "could not load bootloader '%s'", ipl->firmware);
+            return;
         }
 
         /* default boot target is the bios */
@@ -166,10 +163,10 @@ static void s390_ipl_realize(DeviceState *dev, Error **errp)
                                &pentry, NULL,
                                NULL, NULL, 1, EM_S390, 0, 0);
         if (kernel_size < 0) {
-            kernel_size = load_image_targphys(ipl->kernel, 0, ram_size);
+            kernel_size = load_image_targphys(ipl->kernel, 0, ms->ram_size);
             if (kernel_size < 0) {
-                error_setg(&err, "could not load kernel '%s'", ipl->kernel);
-                goto error;
+                error_setg(errp, "could not load kernel '%s'", ipl->kernel);
+                return;
             }
             /* if this is Linux use KERN_IMAGE_START */
             magic = rom_ptr(LINUX_MAGIC_ADDR, 6);
@@ -181,8 +178,8 @@ static void s390_ipl_realize(DeviceState *dev, Error **errp)
                 if (ipl_psw) {
                     pentry = be32_to_cpu(*ipl_psw) & PSW_MASK_SHORT_ADDR;
                 } else {
-                    error_setg(&err, "Could not get IPL PSW");
-                    goto error;
+                    error_setg(errp, "Could not get IPL PSW");
+                    return;
                 }
             }
         }
@@ -213,10 +210,10 @@ static void s390_ipl_realize(DeviceState *dev, Error **errp)
                 initrd_offset += 0x100000;
             }
             initrd_size = load_image_targphys(ipl->initrd, initrd_offset,
-                                              ram_size - initrd_offset);
+                                              ms->ram_size - initrd_offset);
             if (initrd_size == -1) {
-                error_setg(&err, "could not load initrd '%s'", ipl->initrd);
-                goto error;
+                error_setg(errp, "could not load initrd '%s'", ipl->initrd);
+                return;
             }
 
             /*
@@ -246,8 +243,6 @@ static void s390_ipl_realize(DeviceState *dev, Error **errp)
      * TODO: there should be a better way to do this.
      */
     qemu_register_reset(resettable_cold_reset_fn, dev);
-error:
-    error_propagate(errp, err);
 }
 
 static Property s390_ipl_properties[] = {
@@ -453,6 +448,7 @@ int s390_ipl_set_loadparm(uint8_t *loadparm)
 
 static int load_netboot_image(Error **errp)
 {
+    MachineState *ms = MACHINE(qdev_get_machine());
     S390IPLState *ipl = get_ipl_device();
     char *netboot_filename;
     MemoryRegion *sysmem =  get_system_memory();
@@ -485,7 +481,7 @@ static int load_netboot_image(Error **errp)
                             false);
 
     if (img_size < 0) {
-        img_size = load_image_size(netboot_filename, ram_ptr, ram_size);
+        img_size = load_image_size(netboot_filename, ram_ptr, ms->ram_size);
         ipl->start_addr = KERN_IMAGE_START;
     }
 
@@ -553,9 +549,9 @@ static void update_machine_ipl_properties(IplParameterBlock *iplb)
             ascii_loadparm[i] = ebcdic2ascii[(uint8_t) ebcdic_loadparm[i]];
         }
         ascii_loadparm[i] = 0;
-        object_property_set_str(machine, ascii_loadparm, "loadparm", &err);
+        object_property_set_str(machine, "loadparm", ascii_loadparm, &err);
     } else {
-        object_property_set_str(machine, "", "loadparm", &err);
+        object_property_set_str(machine, "loadparm", "", &err);
     }
     if (err) {
         warn_report_err(err);
@@ -566,10 +562,29 @@ void s390_ipl_update_diag308(IplParameterBlock *iplb)
 {
     S390IPLState *ipl = get_ipl_device();
 
-    ipl->iplb = *iplb;
-    ipl->iplb_valid = true;
+    /*
+     * The IPLB set and retrieved by subcodes 8/9 is completely
+     * separate from the one managed via subcodes 5/6.
+     */
+    if (iplb->pbt == S390_IPL_TYPE_PV) {
+        ipl->iplb_pv = *iplb;
+        ipl->iplb_valid_pv = true;
+    } else {
+        ipl->iplb = *iplb;
+        ipl->iplb_valid = true;
+    }
     ipl->netboot = is_virtio_net_device(iplb);
     update_machine_ipl_properties(iplb);
+}
+
+IplParameterBlock *s390_ipl_get_iplb_pv(void)
+{
+    S390IPLState *ipl = get_ipl_device();
+
+    if (!ipl->iplb_valid_pv) {
+        return NULL;
+    }
+    return &ipl->iplb_pv;
 }
 
 IplParameterBlock *s390_ipl_get_iplb(void)
@@ -612,7 +627,8 @@ void s390_ipl_reset_request(CPUState *cs, enum s390_reset reset_type)
         }
     }
     if (reset_type == S390_RESET_MODIFIED_CLEAR ||
-        reset_type == S390_RESET_LOAD_NORMAL) {
+        reset_type == S390_RESET_LOAD_NORMAL ||
+        reset_type == S390_RESET_PV) {
         /* ignore -no-reboot, send no event  */
         qemu_system_reset_request(SHUTDOWN_CAUSE_SUBSYSTEM_RESET);
     } else {
@@ -658,6 +674,38 @@ static void s390_ipl_prepare_qipl(S390CPU *cpu)
     }
     memcpy(addr + QIPL_ADDRESS, &ipl->qipl, sizeof(QemuIplParameters));
     cpu_physical_memory_unmap(addr, len, 1, len);
+}
+
+int s390_ipl_prepare_pv_header(void)
+{
+    IplParameterBlock *ipib = s390_ipl_get_iplb_pv();
+    IPLBlockPV *ipib_pv = &ipib->pv;
+    void *hdr = g_malloc(ipib_pv->pv_header_len);
+    int rc;
+
+    cpu_physical_memory_read(ipib_pv->pv_header_addr, hdr,
+                             ipib_pv->pv_header_len);
+    rc = s390_pv_set_sec_parms((uintptr_t)hdr,
+                               ipib_pv->pv_header_len);
+    g_free(hdr);
+    return rc;
+}
+
+int s390_ipl_pv_unpack(void)
+{
+    IplParameterBlock *ipib = s390_ipl_get_iplb_pv();
+    IPLBlockPV *ipib_pv = &ipib->pv;
+    int i, rc = 0;
+
+    for (i = 0; i < ipib_pv->num_comp; i++) {
+        rc = s390_pv_unpack(ipib_pv->components[i].addr,
+                            TARGET_PAGE_ALIGN(ipib_pv->components[i].size),
+                            ipib_pv->components[i].tweak_pref);
+        if (rc) {
+            break;
+        }
+    }
+    return rc;
 }
 
 void s390_ipl_prepare_cpu(S390CPU *cpu)

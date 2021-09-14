@@ -5,11 +5,9 @@
 #include "qemu/timer.h"
 #include "qemu/notify.h"
 #include "qemu/uuid.h"
-#include "qom/object.h"
 
 /* vl.c */
 
-extern const char *bios_name;
 extern int only_migratable;
 extern const char *qemu_name;
 extern QemuUUID qemu_uuid;
@@ -18,10 +16,13 @@ extern bool qemu_uuid_set;
 void qemu_add_exit_notifier(Notifier *notify);
 void qemu_remove_exit_notifier(Notifier *notify);
 
-extern bool machine_init_done;
-
+void qemu_run_machine_init_done_notifiers(void);
 void qemu_add_machine_init_done_notifier(Notifier *notify);
 void qemu_remove_machine_init_done_notifier(Notifier *notify);
+
+void configure_rtc(QemuOpts *opts);
+
+void qemu_init_subsystems(void);
 
 extern int autostart;
 
@@ -42,7 +43,6 @@ extern int win2k_install_hack;
 extern int alt_grab;
 extern int ctrl_grab;
 extern int graphic_rotate;
-extern int no_shutdown;
 extern int old_param;
 extern int boot_menu;
 extern bool boot_strict;
@@ -70,10 +70,6 @@ void hmp_pcie_aer_inject_error(Monitor *mon, const QDict *qdict);
 
 /* Return the Chardev for serial port i, or NULL if none */
 Chardev *serial_hd(int i);
-/* return the number of serial ports defined by the user. serial_hd(i)
- * will always return NULL for any i which is greater than or equal to this.
- */
-int serial_max_hds(void);
 
 /* parallel ports */
 
@@ -92,7 +88,7 @@ void check_boot_index(int32_t bootindex, Error **errp);
 void del_boot_device_path(DeviceState *dev, const char *suffix);
 void device_add_bootindex_property(Object *obj, int32_t *bootindex,
                                    const char *name, const char *suffix,
-                                   DeviceState *dev, Error **errp);
+                                   DeviceState *dev);
 void restore_boot_order(void *opaque);
 void validate_bootdevices(const char *devices, Error **errp);
 void add_boot_device_lchs(DeviceState *dev, const char *suffix,
@@ -105,8 +101,6 @@ typedef void QEMUBootSetHandler(void *opaque, const char *boot_order,
                                 Error **errp);
 void qemu_register_boot_set(QEMUBootSetHandler *func, void *opaque);
 void qemu_boot_set(const char *boot_order, Error **errp);
-
-QemuOpts *qemu_get_machine_opts(void);
 
 bool defaults_enabled(void);
 

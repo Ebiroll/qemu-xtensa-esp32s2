@@ -16,10 +16,10 @@
 #include "hw/ide/pci.h"
 #include "qemu/module.h"
 #include "trace.h"
+#include "qom/object.h"
 
 #define TYPE_SII3112_PCI "sii3112"
-#define SII3112_PCI(obj) OBJECT_CHECK(SiI3112PCIState, (obj), \
-                         TYPE_SII3112_PCI)
+OBJECT_DECLARE_SIMPLE_TYPE(SiI3112PCIState, SII3112_PCI)
 
 typedef struct SiI3112Regs {
     uint32_t confstat;
@@ -28,11 +28,11 @@ typedef struct SiI3112Regs {
     uint8_t swdata;
 } SiI3112Regs;
 
-typedef struct SiI3112PCIState {
+struct SiI3112PCIState {
     PCIIDEState i;
     MemoryRegion mmio;
     SiI3112Regs regs[2];
-} SiI3112PCIState;
+};
 
 /* The sii3112_reg_read and sii3112_reg_write functions implement the
  * Internal Register Space - BAR5 (section 6.7 of the data sheet).
@@ -42,7 +42,7 @@ static uint64_t sii3112_reg_read(void *opaque, hwaddr addr,
                                 unsigned int size)
 {
     SiI3112PCIState *d = opaque;
-    uint64_t val = 0;
+    uint64_t val;
 
     switch (addr) {
     case 0x00:
@@ -126,6 +126,7 @@ static uint64_t sii3112_reg_read(void *opaque, hwaddr addr,
         break;
     default:
         val = 0;
+        break;
     }
     trace_sii3112_read(size, addr, val);
     return val;
@@ -201,7 +202,7 @@ static void sii3112_reg_write(void *opaque, hwaddr addr,
         d->regs[1].sien = (val >> 16) & 0x3eed;
         break;
     default:
-        val = 0;
+        break;
     }
 }
 

@@ -25,12 +25,10 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
-#include "cpu.h"
 #include "hw/qdev-properties.h"
 #include "hw/arm/fsl-imx25.h"
 #include "hw/boards.h"
 #include "qemu/error-report.h"
-#include "exec/address-spaces.h"
 #include "sysemu/qtest.h"
 #include "hw/i2c/i2c.h"
 #include "qemu/cutils.h"
@@ -67,21 +65,19 @@ static struct arm_boot_info imx25_pdk_binfo;
 
 static void imx25_pdk_init(MachineState *machine)
 {
-    MachineClass *mc = MACHINE_GET_CLASS(machine);
     IMX25PDK *s = g_new0(IMX25PDK, 1);
     unsigned int ram_size;
     unsigned int alias_offset;
     int i;
 
-    object_initialize_child(OBJECT(machine), "soc", &s->soc, sizeof(s->soc),
-                            TYPE_FSL_IMX25, &error_abort, NULL);
+    object_initialize_child(OBJECT(machine), "soc", &s->soc, TYPE_FSL_IMX25);
 
-    object_property_set_bool(OBJECT(&s->soc), true, "realized", &error_fatal);
+    qdev_realize(DEVICE(&s->soc), NULL, &error_fatal);
 
     /* We need to initialize our memory */
     if (machine->ram_size > (FSL_IMX25_SDRAM0_SIZE + FSL_IMX25_SDRAM1_SIZE)) {
-        char *sz = size_to_str(mc->default_ram_size);
-        error_report("Invalid RAM size, should be %s", sz);
+        char *sz = size_to_str(FSL_IMX25_SDRAM0_SIZE + FSL_IMX25_SDRAM1_SIZE);
+        error_report("RAM size more than %s is not supported", sz);
         g_free(sz);
         exit(EXIT_FAILURE);
     }
@@ -130,10 +126,9 @@ static void imx25_pdk_init(MachineState *machine)
         di = drive_get_next(IF_SD);
         blk = di ? blk_by_legacy_dinfo(di) : NULL;
         bus = qdev_get_child_bus(DEVICE(&s->soc.esdhc[i]), "sd-bus");
-        carddev = qdev_create(bus, TYPE_SD_CARD);
-        qdev_prop_set_drive(carddev, "drive", blk, &error_fatal);
-        object_property_set_bool(OBJECT(carddev), true,
-                                 "realized", &error_fatal);
+        carddev = qdev_new(TYPE_SD_CARD);
+        qdev_prop_set_drive_err(carddev, "drive", blk, &error_fatal);
+        qdev_realize_and_unref(carddev, bus, &error_fatal);
     }
 
     /*

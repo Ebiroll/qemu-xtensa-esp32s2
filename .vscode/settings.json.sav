@@ -1,0 +1,6 @@
+{
+    "files.associations": {
+        "libfdt_env.h": "c",
+        "esp32s2_dport.h": "c"
+    }
+}

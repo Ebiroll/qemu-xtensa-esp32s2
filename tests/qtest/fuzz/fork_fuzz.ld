@@ -16,6 +16,11 @@ SECTIONS
       /* Lowest stack counter */
       *(__sancov_lowest_stack);
   }
+}
+INSERT AFTER .data;
+
+SECTIONS
+{
   .data.fuzz_ordered :
   {
       /*
@@ -28,7 +33,17 @@ SECTIONS
 
       /* Internal Libfuzzer TracePC object which contains the ValueProfileMap */
       FuzzerTracePC*(.bss*);
+      /*
+       * In case the above line fails, explicitly specify the (mangled) name of
+       * the object we care about
+       */
+       *(.bss._ZN6fuzzer3TPCE);
   }
+}
+INSERT AFTER .data.fuzz_start;
+
+SECTIONS
+{
   .data.fuzz_end : ALIGN(4K)
   {
       __FUZZ_COUNTERS_END = .;
@@ -38,4 +53,4 @@ SECTIONS
  * Don't overwrite the SECTIONS in the default linker script. Instead insert the
  * above into the default script
  */
-INSERT AFTER .data;
+INSERT AFTER .data.fuzz_ordered;

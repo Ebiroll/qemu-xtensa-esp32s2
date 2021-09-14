@@ -19,14 +19,15 @@
 #include "qemu/error-report.h"
 #include "exec/address-spaces.h"
 #include "cpu.h"
-#include "internal.h"
-#include "kvm_s390x.h"
+#include "s390x-internal.h"
+#include "kvm/kvm_s390x.h"
 #include "sysemu/kvm.h"
 #include "sysemu/tcg.h"
 #include "exec/exec-all.h"
 #include "trace.h"
 #include "hw/hw.h"
 #include "hw/s390x/storage-keys.h"
+#include "hw/boards.h"
 
 /* Fetch/store bits in the translation exception code: */
 #define FS_READ  0x800
@@ -292,10 +293,11 @@ static void mmu_handle_skey(target_ulong addr, int rw, int *flags)
 {
     static S390SKeysClass *skeyclass;
     static S390SKeysState *ss;
+    MachineState *ms = MACHINE(qdev_get_machine());
     uint8_t key;
     int rc;
 
-    if (unlikely(addr >= ram_size)) {
+    if (unlikely(addr >= ms->ram_size)) {
         return;
     }
 
@@ -472,6 +474,20 @@ static int translate_pages(S390CPU *cpu, vaddr addr, int nr_pages,
     }
 
     return 0;
+}
+
+int s390_cpu_pv_mem_rw(S390CPU *cpu, unsigned int offset, void *hostbuf,
+                       int len, bool is_write)
+{
+    int ret;
+
+    if (kvm_enabled()) {
+        ret = kvm_s390_mem_op_pv(cpu, offset, hostbuf, len, is_write);
+    } else {
+        /* Protected Virtualization is a KVM/Hardware only feature */
+        g_assert_not_reached();
+    }
+    return ret;
 }
 
 /**

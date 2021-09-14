@@ -32,7 +32,7 @@
 #include "qemu-common.h"
 /* Needed early for CONFIG_BSD etc. */
 #include "net/slirp.h"
-#include "qemu-options.h"
+#include "qemu/qemu-options.h"
 #include "qemu/error-report.h"
 #include "qemu/log.h"
 #include "sysemu/runstate.h"
@@ -78,27 +78,6 @@ void os_setup_signal_handling(void)
     sigaction(SIGINT,  &act, NULL);
     sigaction(SIGHUP,  &act, NULL);
     sigaction(SIGTERM, &act, NULL);
-}
-
-/*
- * Find a likely location for support files using the location of the binary.
- * When running from the build tree this will be "$bindir/../pc-bios".
- * Otherwise, this is CONFIG_QEMU_DATADIR.
- */
-char *os_find_datadir(void)
-{
-    g_autofree char *exec_dir = NULL;
-    g_autofree char *dir = NULL;
-
-    exec_dir = qemu_get_exec_dir();
-    g_return_val_if_fail(exec_dir != NULL, NULL);
-
-    dir = g_build_filename(exec_dir, "..", "pc-bios", NULL);
-    if (g_file_test(dir, G_FILE_TEST_IS_DIR)) {
-        return g_steal_pointer(&dir);
-    }
-
-    return g_strdup(CONFIG_QEMU_DATADIR);
 }
 
 void os_set_proc_name(const char *s)
@@ -174,6 +153,9 @@ int os_parse_cmd_args(int index, const char *optarg)
         break;
 #if defined(CONFIG_LINUX)
     case QEMU_OPTION_enablefips:
+        warn_report("-enable-fips is deprecated, please build QEMU with "
+                    "the `libgcrypt` library as the cryptography provider "
+                    "to enable FIPS compliance");
         fips_set_state(true);
         break;
 #endif
@@ -294,7 +276,7 @@ void os_setup_post(void)
             error_report("not able to chdir to /: %s", strerror(errno));
             exit(1);
         }
-        TFR(fd = qemu_open("/dev/null", O_RDWR));
+        TFR(fd = qemu_open_old("/dev/null", O_RDWR));
         if (fd == -1) {
             exit(1);
         }
@@ -337,6 +319,7 @@ bool is_daemonized(void)
 
 int os_mlock(void)
 {
+#ifdef HAVE_MLOCKALL
     int ret = 0;
 
     ret = mlockall(MCL_CURRENT | MCL_FUTURE);
@@ -345,4 +328,7 @@ int os_mlock(void)
     }
 
     return ret;
+#else
+    return -ENOSYS;
+#endif
 }

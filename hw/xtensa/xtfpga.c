@@ -35,7 +35,6 @@
 #include "hw/qdev-properties.h"
 #include "elf.h"
 #include "exec/memory.h"
-#include "exec/address-spaces.h"
 #include "hw/char/serial.h"
 #include "net/net.h"
 #include "hw/sysbus.h"
@@ -148,11 +147,11 @@ static void xtfpga_net_init(MemoryRegion *address_space,
     SysBusDevice *s;
     MemoryRegion *ram;
 
-    dev = qdev_create(NULL, "open_eth");
+    dev = qdev_new("open_eth");
     qdev_set_nic_properties(dev, nd);
-    qdev_init_nofail(dev);
 
     s = SYS_BUS_DEVICE(dev);
+    sysbus_realize_and_unref(s, &error_fatal);
     sysbus_connect_irq(s, 0, irq);
     memory_region_add_subregion(address_space, base,
             sysbus_mmio_get_region(s, 0));
@@ -171,18 +170,17 @@ static PFlashCFI01 *xtfpga_flash_init(MemoryRegion *address_space,
                                       DriveInfo *dinfo, int be)
 {
     SysBusDevice *s;
-    DeviceState *dev = qdev_create(NULL, TYPE_PFLASH_CFI01);
+    DeviceState *dev = qdev_new(TYPE_PFLASH_CFI01);
 
-    qdev_prop_set_drive(dev, "drive", blk_by_legacy_dinfo(dinfo),
-                        &error_abort);
+    qdev_prop_set_drive(dev, "drive", blk_by_legacy_dinfo(dinfo));
     qdev_prop_set_uint32(dev, "num-blocks",
                          board->flash->size / board->flash->sector_size);
     qdev_prop_set_uint64(dev, "sector-length", board->flash->sector_size);
     qdev_prop_set_uint8(dev, "width", 2);
     qdev_prop_set_bit(dev, "big-endian", be);
     qdev_prop_set_string(dev, "name", "xtfpga.io.flash");
-    qdev_init_nofail(dev);
     s = SYS_BUS_DEVICE(dev);
+    sysbus_realize_and_unref(s, &error_fatal);
     memory_region_add_subregion(address_space, board->flash->base,
                                 sysbus_mmio_get_region(s, 0));
     return PFLASH_CFI01(dev);
@@ -234,11 +232,10 @@ static void xtfpga_init(const XtfpgaBoardDesc *board, MachineState *machine)
     qemu_irq *extints;
     DriveInfo *dinfo;
     PFlashCFI01 *flash = NULL;
-    QemuOpts *machine_opts = qemu_get_machine_opts();
-    const char *kernel_filename = qemu_opt_get(machine_opts, "kernel");
-    const char *kernel_cmdline = qemu_opt_get(machine_opts, "append");
-    const char *dtb_filename = qemu_opt_get(machine_opts, "dtb");
-    const char *initrd_filename = qemu_opt_get(machine_opts, "initrd");
+    const char *kernel_filename = machine->kernel_filename;
+    const char *kernel_cmdline = machine->kernel_cmdline;
+    const char *dtb_filename = machine->dtb;
+    const char *initrd_filename = machine->initrd_filename;
     const unsigned system_io_size = 224 * MiB;
     uint32_t freq = 10000000;
     int n;
@@ -414,9 +411,8 @@ static void xtfpga_init(const XtfpgaBoardDesc *board, MachineState *machine)
         env->regs[2] = tagptr;
 
         uint64_t elf_entry;
-        uint64_t elf_lowaddr;
         int success = load_elf(kernel_filename, NULL, translate_phys_addr, cpu,
-                &elf_entry, &elf_lowaddr, NULL, NULL, be, EM_XTENSA, 0, 0);
+                &elf_entry, NULL, NULL, NULL, be, EM_XTENSA, 0, 0);
         if (success > 0) {
             entry_point = elf_entry;
         } else {

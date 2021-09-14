@@ -20,8 +20,7 @@ static void virtio_ccw_gpu_realize(VirtioCcwDevice *ccw_dev, Error **errp)
     VirtIOGPUCcw *dev = VIRTIO_GPU_CCW(ccw_dev);
     DeviceState *vdev = DEVICE(&dev->vdev);
 
-    qdev_set_parent_bus(vdev, BUS(&ccw_dev->bus));
-    object_property_set_bool(OBJECT(vdev), true, "realized", errp);
+    qdev_realize(vdev, BUS(&ccw_dev->bus), errp);
 }
 
 static void virtio_ccw_gpu_instance_init(Object *obj)
@@ -60,10 +59,15 @@ static const TypeInfo virtio_ccw_gpu = {
     .instance_init = virtio_ccw_gpu_instance_init,
     .class_init    = virtio_ccw_gpu_class_init,
 };
+module_obj(TYPE_VIRTIO_GPU_CCW);
 
 static void virtio_ccw_gpu_register(void)
 {
-    type_register_static(&virtio_ccw_gpu);
+    if (have_virtio_ccw) {
+        type_register_static(&virtio_ccw_gpu);
+    }
 }
 
 type_init(virtio_ccw_gpu_register)
+
+module_arch("s390x");
