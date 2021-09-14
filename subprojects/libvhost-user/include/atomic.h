@@ -1,1 +1,1 @@
-../../../include/qemu/atomic.h
+#include "../../../include/qemu/atomic.h"
