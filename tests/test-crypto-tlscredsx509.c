@@ -25,7 +25,8 @@
 #include "qapi/error.h"
 #include "qemu/module.h"
 
-#ifdef QCRYPTO_HAVE_TLS_TEST_SUPPORT
+#if 0
+//#ifdef QCRYPTO_HAVE_TLS_TEST_SUPPORT
 
 #define WORKDIR "tests/test-crypto-tlscredsx509-work/"
 #define KEYFILE WORKDIR "key-ctx.pem"

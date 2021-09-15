@@ -117,7 +117,7 @@ softmmu_ss.add(when: 'CONFIG_XTENSA_ESP32S2', if_true: files(
   'esp32s2_rtc_cntl.c',
 ))
 
-if 'CONFIG_GCRYPT' in config_host
+if true in config_host
   softmmu_ss.add(gcrypt)
 endif
 

@@ -34,7 +34,8 @@
 #include "authz/list.h"
 #include "qom/object_interfaces.h"
 
-#ifdef QCRYPTO_HAVE_TLS_TEST_SUPPORT
+//#ifdef QCRYPTO_HAVE_TLS_TEST_SUPPORT
+#if 0
 
 #define WORKDIR "tests/test-io-channel-tls-work/"
 #define KEYFILE WORKDIR "key-ctx.pem"

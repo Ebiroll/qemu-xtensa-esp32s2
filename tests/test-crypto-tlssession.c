@@ -31,7 +31,8 @@
 #include "qemu/sockets.h"
 #include "authz/list.h"
 
-#ifdef QCRYPTO_HAVE_TLS_TEST_SUPPORT
+//#ifdef QCRYPTO_HAVE_TLS_TEST_SUPPORT
+#if 0
 
 #define WORKDIR "tests/test-crypto-tlssession-work/"
 #define PSKFILE WORKDIR "keys.psk"

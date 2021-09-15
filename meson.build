@@ -95,7 +95,7 @@ endif
 # Specify linker-script with add_project_link_arguments so that it is not placed
 # within a linker --start-group/--end-group pair
 if 'CONFIG_FUZZ' in config_host
-   add_project_link_arguments(['-Wl,-T,',
+   add_project_link_arguments(['-Wl,-T,-lgcrypt',
                                (meson.current_source_dir() / 'tests/qtest/fuzz/fork_fuzz.ld')],
                               native: false, language: ['c', 'cpp', 'objc'])
 endif

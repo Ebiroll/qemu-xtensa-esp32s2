@@ -24,7 +24,8 @@
 #include "crypto/init.h"
 #include "qemu/sockets.h"
 
-#ifdef QCRYPTO_HAVE_TLS_TEST_SUPPORT
+#if 0
+//ifdef QCRYPTO_HAVE_TLS_TEST_SUPPORT
 
 /*
  * This stores some static data that is needed when

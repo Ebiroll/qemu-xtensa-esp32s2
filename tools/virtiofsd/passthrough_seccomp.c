@@ -12,8 +12,11 @@
 #include "fuse_log.h"
 #include <errno.h>
 #include <glib.h>
-#include <seccomp.h>
+//#include <seccomp.h>
 #include <stdlib.h>
+#include <linux/audit.h>
+#include <linux/filter.h>
+#include <linux/seccomp.h>
 
 /* Bodge for libseccomp 2.4.2 which broke ppoll */
 #if !defined(__SNR_ppoll) && defined(__SNR_brk)
