@@ -67,47 +67,6 @@ typedef enum NBDClientState {
     NBD_CLIENT_QUIT
 } NBDClientState;
 
-typedef enum NBDConnectThreadState {
-    /* No thread, no pending results */
-    CONNECT_THREAD_NONE,
-
-    /* Thread is running, no results for now */
-    CONNECT_THREAD_RUNNING,
-
-    /*
-     * Thread is running, but requestor exited. Thread should close
-     * the new socket and free the connect state on exit.
-     */
-    CONNECT_THREAD_RUNNING_DETACHED,
-
-    /* Thread finished, results are stored in a state */
-    CONNECT_THREAD_FAIL,
-    CONNECT_THREAD_SUCCESS
-} NBDConnectThreadState;
-
-typedef struct NBDConnectThread {
-    /* Initialization constants */
-    SocketAddress *saddr; /* address to connect to */
-    /*
-     * Bottom half to schedule on completion. Scheduled only if bh_ctx is not
-     * NULL
-     */
-    QEMUBHFunc *bh_func;
-    void *bh_opaque;
-
-    /*
-     * Result of last attempt. Valid in FAIL and SUCCESS states.
-     * If you want to steal error, don't forget to set pointer to NULL.
-     */
-    QIOChannelSocket *sioc;
-    Error *err;
-
-    /* state and bh_ctx are protected by mutex */
-    QemuMutex mutex;
-    NBDConnectThreadState state; /* current state of the thread */
-    AioContext *bh_ctx; /* where to schedule bh (NULL means don't schedule) */
-} NBDConnectThread;
-
 typedef struct BDRVNBDState {
     QIOChannel *ioc; /* The current I/O channel */
     NBDExportInfo info;
@@ -303,15 +262,6 @@ static void coroutine_fn nbd_client_co_drain_begin(BlockDriverState *bs)
         s->state = NBD_CLIENT_CONNECTING_NOWAIT;
         qemu_co_queue_restart_all(&s->free_sema);
     }
-
-    nbd_co_establish_connection_cancel(bs, false);
-
-    reconnect_delay_timer_del(s);
-
-    if (s->state == NBD_CLIENT_CONNECTING_WAIT) {
-        s->state = NBD_CLIENT_CONNECTING_NOWAIT;
-        qemu_co_queue_restart_all(&s->free_sema);
-    }
 }
 
 static void coroutine_fn nbd_client_co_drain_end(BlockDriverState *bs)
@@ -333,10 +283,6 @@ static void nbd_teardown_connection(BlockDriverState *bs)
     if (s->ioc) {
         /* finish any pending coroutines */
         qio_channel_shutdown(s->ioc, QIO_CHANNEL_SHUTDOWN_BOTH, NULL);
-    } else if (s->sioc) {
-        /* abort negotiation */
-        qio_channel_shutdown(QIO_CHANNEL(s->sioc), QIO_CHANNEL_SHUTDOWN_BOTH,
-                             NULL);
     }
 
     s->state = NBD_CLIENT_QUIT;
@@ -2019,7 +1965,6 @@ static int nbd_open(BlockDriverState *bs, QDict *options, int flags,
 {
     int ret;
     BDRVNBDState *s = (BDRVNBDState *)bs->opaque;
-    QIOChannelSocket *sioc;
 
     s->bs = bs;
     qemu_co_mutex_init(&s->send_mutex);
@@ -2042,8 +1987,6 @@ static int nbd_open(BlockDriverState *bs, QDict *options, int flags,
     if (ret < 0) {
         goto fail;
     }
-
-    nbd_init_connect_thread(s);
 
     s->connection_co = qemu_coroutine_create(nbd_connection_entry, s);
     bdrv_inc_in_flight(bs);
@@ -2099,33 +2042,6 @@ static void nbd_close(BlockDriverState *bs)
 {
     nbd_client_close(bs);
     nbd_clear_bdrvstate(bs);
-}
-
-/*
- * NBD cannot truncate, but if the caller asks to truncate to the same size, or
- * to a smaller size with exact=false, there is no reason to fail the
- * operation.
- *
- * Preallocation mode is ignored since it does not seems useful to fail when
- * we never change anything.
- */
-static int coroutine_fn nbd_co_truncate(BlockDriverState *bs, int64_t offset,
-                                        bool exact, PreallocMode prealloc,
-                                        BdrvRequestFlags flags, Error **errp)
-{
-    BDRVNBDState *s = bs->opaque;
-
-    if (offset != s->info.size && exact) {
-        error_setg(errp, "Cannot resize NBD nodes");
-        return -ENOTSUP;
-    }
-
-    if (offset > s->info.size) {
-        error_setg(errp, "Cannot grow NBD nodes");
-        return -EINVAL;
-    }
-
-    return 0;
 }
 
 /*

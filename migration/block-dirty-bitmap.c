@@ -549,68 +549,6 @@ static int add_bitmaps_to_list(DBMSaveState *s, BlockDriverState *bs,
                 /* Skip bitmaps with no alias */
                 continue;
             }
-        } else {
-            if (strlen(bitmap_name) > UINT8_MAX) {
-                error_report("Cannot migrate bitmap '%s' on node '%s': "
-                             "Name is longer than %u bytes",
-                             bitmap_name, bs_name, UINT8_MAX);
-                return -1;
-            }
-            bitmap_alias = bitmap_name;
-        }
-
-        bdrv_ref(bs);
-        bdrv_dirty_bitmap_set_busy(bitmap, true);
-
-        dbms = g_new0(SaveBitmapState, 1);
-        dbms->bs = bs;
-        dbms->node_alias = g_strdup(node_alias);
-        dbms->bitmap_alias = g_strdup(bitmap_alias);
-        dbms->bitmap = bitmap;
-        dbms->total_sectors = bdrv_nb_sectors(bs);
-        dbms->sectors_per_chunk = CHUNK_SIZE * 8LLU *
-            (bdrv_dirty_bitmap_granularity(bitmap) >> BDRV_SECTOR_BITS);
-        assert(dbms->sectors_per_chunk != 0);
-        if (bdrv_dirty_bitmap_enabled(bitmap)) {
-            dbms->flags |= DIRTY_BITMAP_MIG_START_FLAG_ENABLED;
-        }
-        if (bdrv_dirty_bitmap_get_persistence(bitmap)) {
-            dbms->flags |= DIRTY_BITMAP_MIG_START_FLAG_PERSISTENT;
-        }
-
-        QSIMPLEQ_INSERT_TAIL(&s->dbms_list, dbms, entry);
-    }
-
-    return 0;
-}
-
-/* Called with iothread lock taken. */
-static int init_dirty_bitmap_migration(DBMSaveState *s)
-{
-    BlockDriverState *bs;
-    SaveBitmapState *dbms;
-    GHashTable *handled_by_blk = g_hash_table_new(NULL, NULL);
-    BlockBackend *blk;
-    const MigrationParameters *mig_params = &migrate_get_current()->parameters;
-    GHashTable *alias_map = NULL;
-
-    if (mig_params->has_block_bitmap_mapping) {
-        alias_map = construct_alias_map(mig_params->block_bitmap_mapping, true,
-                                        &error_abort);
-    }
-
-    s->bulk_completed = false;
-    s->prev_bs = NULL;
-    s->prev_bitmap = NULL;
-    s->no_bitmaps = false;
-
-    if (!alias_map) {
-        /*
-         * Use blockdevice name for direct (or filtered) children of named block
-         * backends.
-         */
-        for (blk = blk_next(NULL); blk; blk = blk_next(blk)) {
-            const char *name = blk_name(blk);
 
             bitmap_alias = bmap_inner->alias;
             if (bmap_inner->has_transform) {

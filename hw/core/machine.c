@@ -78,28 +78,6 @@ GlobalProperty hw_compat_5_0[] = {
 };
 const size_t hw_compat_5_0_len = G_N_ELEMENTS(hw_compat_5_0);
 
-GlobalProperty hw_compat_5_1[] = {
-    { "vhost-scsi", "num_queues", "1"},
-    { "vhost-user-blk", "num-queues", "1"},
-    { "vhost-user-scsi", "num_queues", "1"},
-    { "virtio-blk-device", "num-queues", "1"},
-    { "virtio-scsi-device", "num_queues", "1"},
-    { "nvme", "use-intel-id", "on"},
-    { "pvpanic", "events", "1"}, /* PVPANIC_PANICKED */
-};
-const size_t hw_compat_5_1_len = G_N_ELEMENTS(hw_compat_5_1);
-
-GlobalProperty hw_compat_5_0[] = {
-    { "pci-host-bridge", "x-config-reg-migration-enabled", "off" },
-    { "virtio-balloon-device", "page-poison", "false" },
-    { "vmport", "x-read-set-eax", "off" },
-    { "vmport", "x-signal-unsupported-cmd", "off" },
-    { "vmport", "x-report-vmx-type", "off" },
-    { "vmport", "x-cmds-v2", "off" },
-    { "virtio-device", "x-disable-legacy-check", "true" },
-};
-const size_t hw_compat_5_0_len = G_N_ELEMENTS(hw_compat_5_0);
-
 GlobalProperty hw_compat_4_2[] = {
     { "virtio-blk-device", "queue-size", "128"},
     { "virtio-scsi-device", "virtqueue_size", "128"},

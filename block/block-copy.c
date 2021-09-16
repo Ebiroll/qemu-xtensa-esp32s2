@@ -409,38 +409,6 @@ static coroutine_fn int block_copy_task_run(AioTaskPool *pool,
 }
 
 /*
- * Takes ownership of @task
- *
- * If pool is NULL directly run the task, otherwise schedule it into the pool.
- *
- * Returns: task.func return code if pool is NULL
- *          otherwise -ECANCELED if pool status is bad
- *          otherwise 0 (successfully scheduled)
- */
-static coroutine_fn int block_copy_task_run(AioTaskPool *pool,
-                                            BlockCopyTask *task)
-{
-    if (!pool) {
-        int ret = task->task.func(&task->task);
-
-        g_free(task);
-        return ret;
-    }
-
-    aio_task_pool_wait_slot(pool);
-    if (aio_task_pool_status(pool) < 0) {
-        co_put_to_shres(task->s->mem, task->bytes);
-        block_copy_task_end(task, -ECANCELED);
-        g_free(task);
-        return -ECANCELED;
-    }
-
-    aio_task_pool_start_task(pool, &task->task);
-
-    return 0;
-}
-
-/*
  * block_copy_do_copy
  *
  * Do copy of cluster-aligned chunk. Requested region is allowed to exceed
@@ -559,27 +527,6 @@ static coroutine_fn int block_copy_task_entry(AioTask *task)
         }
     }
     co_put_to_shres(s->mem, t->bytes);
-    block_copy_task_end(t, ret);
-
-    return ret;
-}
-
-static coroutine_fn int block_copy_task_entry(AioTask *task)
-{
-    BlockCopyTask *t = container_of(task, BlockCopyTask, task);
-    bool error_is_read = false;
-    int ret;
-
-    ret = block_copy_do_copy(t->s, t->offset, t->bytes, t->zeroes,
-                             &error_is_read);
-    if (ret < 0 && !t->call_state->failed) {
-        t->call_state->failed = true;
-        t->call_state->error_is_read = error_is_read;
-    } else {
-        progress_work_done(t->s->progress, t->bytes);
-        t->s->progress_bytes_callback(t->bytes, t->s->progress_opaque);
-    }
-    co_put_to_shres(t->s->mem, t->bytes);
     block_copy_task_end(t, ret);
 
     return ret;

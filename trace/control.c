@@ -248,8 +248,6 @@ static void trace_init_events(const char *fname)
 
 void trace_init_file(void)
 {
-    QemuOpts *opts = qemu_find_opts_singleton("trace");
-    const char *file = qemu_opt_get(opts, "file");
 #ifdef CONFIG_TRACE_SIMPLE
     st_set_trace_file(trace_opts_file);
     if (init_trace_on_startup) {

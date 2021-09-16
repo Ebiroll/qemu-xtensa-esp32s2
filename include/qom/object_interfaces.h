@@ -158,19 +158,6 @@ void user_creatable_process_cmdline(const char *optarg);
 bool user_creatable_print_help(const char *type, QemuOpts *opts);
 
 /**
- * user_creatable_print_help_from_qdict:
- * @args: options to create
- *
- * Prints help considering the other options given in @args (if "qom-type" is
- * given and valid, print properties for the type, otherwise print valid types)
- *
- * In contrast to user_creatable_print_help(), this function can't return that
- * no help was requested. It should only be called if we know that help is
- * requested and it will always print some help.
- */
-void user_creatable_print_help_from_qdict(QDict *args);
-
-/**
  * user_creatable_del:
  * @id: the unique ID for the object
  * @errp: if an error occurs, a pointer to an area to store the error

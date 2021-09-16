@@ -18,14 +18,14 @@
 #define xtensa_modules xtensa_modules_esp32s3
 #include "core-esp32s3/xtensa-modules.inc.c"
 
-static const XtensaOpcodeTranslators* esp32_opcode_translators[] = {
+static const XtensaOpcodeTranslators* esp32s3_opcode_translators[] = {
     &xtensa_core_opcodes,
     &xtensa_fpu_opcodes,
     NULL
 };
 
-static XtensaConfig xtensa_core_esp32 __attribute__((unused)) = {
-    .name = "esp32",
+static XtensaConfig xtensa_core_esp32s3 __attribute__((unused)) = {
+    .name = "esp32s3",
     .gdb_regmap = {
         .reg = {
 #include "core-esp32s3/gdb-config.inc.c"
@@ -33,7 +33,7 @@ static XtensaConfig xtensa_core_esp32 __attribute__((unused)) = {
     },
     .isa_internal = &xtensa_modules,
     .clock_freq_khz = 40000,
-    .opcode_translators = esp32_opcode_translators,
+    .opcode_translators = esp32s3_opcode_translators,
     DEFAULT_SECTIONS
 };
 

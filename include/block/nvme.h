@@ -1154,15 +1154,6 @@ enum NvmeIdCtrlCmic {
     NVME_CMIC_MULTI_CTRL    = 1 << 1,
 };
 
-enum NvmeIdCtrlFrmw {
-    NVME_FRMW_SLOT1_RO = 1 << 0,
-};
-
-enum NvmeIdCtrlLpa {
-    NVME_LPA_NS_SMART = 1 << 0,
-    NVME_LPA_EXTENDED = 1 << 2,
-};
-
 #define NVME_CTRL_SQES_MIN(sqes) ((sqes) & 0xf)
 #define NVME_CTRL_SQES_MAX(sqes) (((sqes) >> 4) & 0xf)
 #define NVME_CTRL_CQES_MIN(cqes) ((cqes) & 0xf)

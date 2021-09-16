@@ -117,6 +117,7 @@
         "initializer_list": "c",
         "string_view": "c",
         "utility": "c",
-        "esp32_sha.h": "c"
+        "esp32_sha.h": "c",
+        "core-isa.h": "c"
     }
 }

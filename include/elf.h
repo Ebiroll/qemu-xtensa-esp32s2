@@ -178,8 +178,6 @@ typedef struct mips_elf_abiflags_v0 {
 
 #define EM_RX           173     /* Renesas RX family */
 
-#define EM_RX           173     /* Renesas RX family */
-
 #define EM_RISCV        243     /* RISC-V */
 
 #define EM_NANOMIPS     249     /* Wave Computing nanoMIPS */
@@ -206,8 +204,6 @@ typedef struct mips_elf_abiflags_v0 {
 #define EM_XTENSA   94      /* Tensilica Xtensa */
 
 #define EM_AARCH64  183
-
-#define EF_AVR_MACH     0x7F       /* Mask for AVR e_flags to get core type */
 
 #define EF_AVR_MACH     0x7F       /* Mask for AVR e_flags to get core type */
 

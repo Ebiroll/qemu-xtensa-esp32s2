@@ -5007,12 +5007,6 @@ int bdrv_drop_filter(BlockDriverState *bs, Error **errp)
                                     errp);
 }
 
-void bdrv_replace_node(BlockDriverState *from, BlockDriverState *to,
-                       Error **errp)
-{
-    return bdrv_replace_node_common(from, to, true, errp);
-}
-
 /*
  * Add new bs contents at the top of an image chain while the chain is
  * live, while keeping required fields on the top layer.
@@ -6216,7 +6210,6 @@ int coroutine_fn bdrv_co_invalidate_cache(BlockDriverState *bs, Error **errp)
         bs->open_flags &= ~BDRV_O_INACTIVE;
         ret = bdrv_refresh_perms(bs, errp);
         if (ret < 0) {
-            bdrv_abort_perm_update(bs);
             bs->open_flags |= BDRV_O_INACTIVE;
             return ret;
         }

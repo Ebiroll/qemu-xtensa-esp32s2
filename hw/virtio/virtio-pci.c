@@ -1415,10 +1415,6 @@ static uint64_t virtio_pci_device_read(void *opaque, hwaddr addr,
         return UINT64_MAX;
     }
 
-    if (vdev == NULL) {
-        return val;
-    }
-
     switch (size) {
     case 1:
         val = virtio_config_modern_readb(vdev, addr);

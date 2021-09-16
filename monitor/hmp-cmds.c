@@ -1299,10 +1299,6 @@ void hmp_migrate_set_parameter(Monitor *mon, const QDict *qdict)
         p->has_cpu_throttle_tailslow = true;
         visit_type_bool(v, param, &p->cpu_throttle_tailslow, &err);
         break;
-    case MIGRATION_PARAMETER_CPU_THROTTLE_TAILSLOW:
-        p->has_cpu_throttle_tailslow = true;
-        visit_type_bool(v, param, &p->cpu_throttle_tailslow, &err);
-        break;
     case MIGRATION_PARAMETER_MAX_CPU_THROTTLE:
         p->has_max_cpu_throttle = true;
         visit_type_uint8(v, param, &p->max_cpu_throttle, &err);

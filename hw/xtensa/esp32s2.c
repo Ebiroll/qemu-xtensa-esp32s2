@@ -47,6 +47,9 @@
 #include "elf.h"
 //#include "exec/memory.h"
 #include "migration/vmstate.h"
+#include "hw/misc/ssi_psram.h"
+#include "hw/sd/dwc_sdmmc.h"
+#include "qemu/datadir.h"
 
 
 BlockBackend *gFlashWorkaround=NULL;

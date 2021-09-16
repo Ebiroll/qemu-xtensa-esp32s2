@@ -2524,34 +2524,6 @@ floatx80 floatx80_mod(floatx80 a, floatx80 b, float_status *status)
     return floatx80_modrem(a, b, true, &quotient, status);
 }
 
-float32 bfloat16_to_float32(bfloat16 a, float_status *s)
-{
-    FloatParts p = bfloat16_unpack_canonical(a, s);
-    FloatParts pr = float_to_float(p, &float32_params, s);
-    return float32_round_pack_canonical(pr, s);
-}
-
-float64 bfloat16_to_float64(bfloat16 a, float_status *s)
-{
-    FloatParts p = bfloat16_unpack_canonical(a, s);
-    FloatParts pr = float_to_float(p, &float64_params, s);
-    return float64_round_pack_canonical(pr, s);
-}
-
-bfloat16 float32_to_bfloat16(float32 a, float_status *s)
-{
-    FloatParts p = float32_unpack_canonical(a, s);
-    FloatParts pr = float_to_float(p, &bfloat16_params, s);
-    return bfloat16_round_pack_canonical(pr, s);
-}
-
-bfloat16 float64_to_bfloat16(float64 a, float_status *s)
-{
-    FloatParts p = float64_unpack_canonical(a, s);
-    FloatParts pr = float_to_float(p, &bfloat16_params, s);
-    return bfloat16_round_pack_canonical(pr, s);
-}
-
 /*
  * Float to Float conversions
  *
@@ -3543,13 +3515,6 @@ uint32_t bfloat16_to_uint32_round_to_zero(bfloat16 a, float_status *s)
 uint64_t bfloat16_to_uint64_round_to_zero(bfloat16 a, float_status *s)
 {
     return bfloat16_to_uint64_scalbn(a, float_round_to_zero, 0, s);
-}
-
-bfloat16 bfloat16_scalbn(bfloat16 a, int n, float_status *status)
-{
-    FloatParts pa = bfloat16_unpack_canonical(a, status);
-    FloatParts pr = scalbn_decomposed(pa, n, status);
-    return bfloat16_round_pack_canonical(pr, status);
 }
 
 /*

@@ -248,19 +248,6 @@ bool user_creatable_print_help(const char *type, QemuOpts *opts)
         user_creatable_print_types();
         return true;
     }
-    g_ptr_array_sort(array, (GCompareFunc)qemu_pstrcmp0);
-    if (array->len > 0) {
-        printf("%s options:\n", type);
-    } else {
-        printf("There are no options for %s.\n", type);
-    }
-    for (i = 0; i < array->len; i++) {
-        printf("%s\n", (char *)array->pdata[i]);
-    }
-    g_ptr_array_set_free_func(array, g_free);
-    g_ptr_array_free(array, true);
-    return true;
-}
 
     if (qemu_opt_has_help_opt(opts)) {
         return type_print_class_properties(type);

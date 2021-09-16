@@ -1,23 +1,24 @@
 {
-    "version": "0.1.0",
+    "version": "2.0.0",
     "command": "make",
-    "isShellCommand": true,
     "options": {
          "cwd": "${workspaceRoot}/../qemu_esp32s2"
      },
     "tasks": [
         {
-            "taskName": "Makefile",
-            // Make this the default build command.
-            "isBuildCommand": true,
-            // Show the output window only if unrecognized errors occur.
-            "showOutput": "always",
-            // No args
-            "args": ["all"],
-            // Use the standard less compilation problem matcher.
+            "label": "Makefile",
+            "type": "shell",
+            "command": "make",
+            "args": [
+                "Makefile",
+                "all"
+            ],
             "problemMatcher": {
                 "owner": "cpp",
-                "fileLocation": ["relative", "${workspaceRoot}"],
+                "fileLocation": [
+                    "relative",
+                    "${workspaceRoot}"
+                ],
                 "pattern": {
                     "regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
                     "file": 1,
@@ -26,6 +27,10 @@
                     "severity": 4,
                     "message": 5
                 }
+            },
+            "group": {
+                "_id": "build",
+                "isDefault": false
             }
         }
     ]

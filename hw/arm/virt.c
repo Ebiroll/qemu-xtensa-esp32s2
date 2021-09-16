@@ -1496,10 +1496,6 @@ static void create_secure_ram(VirtMachineState *vms,
         create_tag_ram(secure_tag_sysmem, base, size, "mach-virt.secure-tag");
     }
 
-    if (secure_tag_sysmem) {
-        create_tag_ram(secure_tag_sysmem, base, size, "mach-virt.secure-tag");
-    }
-
     g_free(nodename);
 }
 

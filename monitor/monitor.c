@@ -647,25 +647,6 @@ void monitor_cleanup(void)
         iothread_stop(mon_iothread);
     }
 
-    /*
-     * The dispatcher needs to stop before destroying the monitor and
-     * the I/O thread.
-     *
-     * We need to poll both qemu_aio_context and iohandler_ctx to make
-     * sure that the dispatcher coroutine keeps making progress and
-     * eventually terminates.  qemu_aio_context is automatically
-     * polled by calling AIO_WAIT_WHILE on it, but we must poll
-     * iohandler_ctx manually.
-     */
-    qmp_dispatcher_co_shutdown = true;
-    if (!qatomic_xchg(&qmp_dispatcher_co_busy, true)) {
-        aio_co_wake(qmp_dispatcher_co);
-    }
-
-    AIO_WAIT_WHILE(qemu_get_aio_context(),
-                   (aio_poll(iohandler_get_aio_context(), false),
-                    qatomic_mb_read(&qmp_dispatcher_co_busy)));
-
     /* Flush output buffers and destroy monitors */
     qemu_mutex_lock(&monitor_lock);
     monitor_destroyed = true;

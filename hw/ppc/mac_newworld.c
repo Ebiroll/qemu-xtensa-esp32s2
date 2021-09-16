@@ -311,10 +311,6 @@ static void ppc_core99_init(MachineState *machine)
         sysbus_mmio_map(s, 0, 0xf0800000);
         sysbus_mmio_map(s, 1, 0xf0c00000);
 
-        for (i = 0; i < 4; i++) {
-            qdev_connect_gpio_out(dev, i, qdev_get_gpio_in(pic_dev, 0x1b + i));
-        }
-
         machine_arch = ARCH_MAC99_U3;
     } else {
         /* Use values found on a real PowerMac */
@@ -325,10 +321,6 @@ static void ppc_core99_init(MachineState *machine)
         sysbus_mmio_map(s, 0, 0xf0800000);
         sysbus_mmio_map(s, 1, 0xf0c00000);
 
-        for (i = 0; i < 4; i++) {
-            qdev_connect_gpio_out(dev, i, qdev_get_gpio_in(pic_dev, 0x1b + i));
-        }
-
         /* Uninorth internal bus */
         uninorth_internal_dev = qdev_new(
                                 TYPE_UNI_NORTH_INTERNAL_PCI_HOST_BRIDGE);
@@ -336,10 +328,6 @@ static void ppc_core99_init(MachineState *machine)
         sysbus_realize_and_unref(s, &error_fatal);
         sysbus_mmio_map(s, 0, 0xf4800000);
         sysbus_mmio_map(s, 1, 0xf4c00000);
-
-        for (i = 0; i < 4; i++) {
-            qdev_connect_gpio_out(dev, i, qdev_get_gpio_in(pic_dev, 0x1b + i));
-        }
 
         /* Uninorth main bus */
         dev = qdev_new(TYPE_UNI_NORTH_PCI_HOST_BRIDGE);
@@ -355,10 +343,6 @@ static void ppc_core99_init(MachineState *machine)
                                     sysbus_mmio_get_region(s, 3));
         sysbus_mmio_map(s, 0, 0xf2800000);
         sysbus_mmio_map(s, 1, 0xf2c00000);
-
-        for (i = 0; i < 4; i++) {
-            qdev_connect_gpio_out(dev, i, qdev_get_gpio_in(pic_dev, 0x1b + i));
-        }
 
         machine_arch = ARCH_MAC99;
     }

@@ -798,32 +798,6 @@ static int compare_chr_send(CompareState *s,
     SendCo *sendco;
     SendEntry *entry;
 
-    sendco->ret = 0;
-    goto out;
-
-err:
-    while (!g_queue_is_empty(&sendco->send_list)) {
-        SendEntry *entry = g_queue_pop_tail(&sendco->send_list);
-        g_free(entry->buf);
-        g_slice_free(SendEntry, entry);
-    }
-    sendco->ret = ret < 0 ? ret : -EIO;
-out:
-    sendco->co = NULL;
-    sendco->done = true;
-    aio_wait_kick();
-}
-
-static int compare_chr_send(CompareState *s,
-                            uint8_t *buf,
-                            uint32_t size,
-                            uint32_t vnet_hdr_len,
-                            bool notify_remote_frame,
-                            bool zero_copy)
-{
-    SendCo *sendco;
-    SendEntry *entry;
-
     if (notify_remote_frame) {
         sendco = &s->notify_sendco;
     } else {
