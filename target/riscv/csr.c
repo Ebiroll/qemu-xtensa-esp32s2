@@ -329,54 +329,6 @@ static RISCVException write_vstart(CPURISCVState *env, int csrno,
     return RISCV_EXCP_NONE;
 }
 
-static int read_vtype(CPURISCVState *env, int csrno, target_ulong *val)
-{
-    *val = env->vtype;
-    return 0;
-}
-
-static int read_vl(CPURISCVState *env, int csrno, target_ulong *val)
-{
-    *val = env->vl;
-    return 0;
-}
-
-static int read_vxrm(CPURISCVState *env, int csrno, target_ulong *val)
-{
-    *val = env->vxrm;
-    return 0;
-}
-
-static int write_vxrm(CPURISCVState *env, int csrno, target_ulong val)
-{
-    env->vxrm = val;
-    return 0;
-}
-
-static int read_vxsat(CPURISCVState *env, int csrno, target_ulong *val)
-{
-    *val = env->vxsat;
-    return 0;
-}
-
-static int write_vxsat(CPURISCVState *env, int csrno, target_ulong val)
-{
-    env->vxsat = val;
-    return 0;
-}
-
-static int read_vstart(CPURISCVState *env, int csrno, target_ulong *val)
-{
-    *val = env->vstart;
-    return 0;
-}
-
-static int write_vstart(CPURISCVState *env, int csrno, target_ulong val)
-{
-    env->vstart = val;
-    return 0;
-}
-
 /* User Timers and Counters */
 static RISCVException read_instret(CPURISCVState *env, int csrno,
                                    target_ulong *val)

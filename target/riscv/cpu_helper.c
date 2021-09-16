@@ -807,16 +807,6 @@ bool riscv_cpu_tlb_fill(CPUState *cs, vaddr address, int size,
             access_type = MMU_DATA_LOAD;
         }
 
-        /*
-         * A G-stage exception may be triggered during two state lookup.
-         * And the env->guest_phys_fault_addr has already been set in
-         * get_physical_address().
-         */
-        if (ret == TRANSLATE_G_STAGE_FAIL) {
-            first_stage_error = false;
-            access_type = MMU_DATA_LOAD;
-        }
-
         qemu_log_mask(CPU_LOG_MMU,
                       "%s 1st-stage address=%" VADDR_PRIx " ret %d physical "
                       TARGET_FMT_plx " prot %d\n",
@@ -1010,26 +1000,6 @@ void riscv_cpu_do_interrupt(CPUState *cs)
         /* handle the trap in S-mode */
         if (riscv_has_ext(env, RVH)) {
             target_ulong hdeleg = async ? env->hideleg : env->hedeleg;
-            bool two_stage_lookup = false;
-
-            if (env->priv == PRV_M ||
-                (env->priv == PRV_S && !riscv_cpu_virt_enabled(env)) ||
-                (env->priv == PRV_U && !riscv_cpu_virt_enabled(env) &&
-                    get_field(env->hstatus, HSTATUS_HU))) {
-                    two_stage_lookup = true;
-            }
-
-            if ((riscv_cpu_virt_enabled(env) || two_stage_lookup) && write_tval) {
-                /*
-                 * If we are writing a guest virtual address to stval, set
-                 * this to 1. If we are trapping to VS we will set this to 0
-                 * later.
-                 */
-                env->hstatus = set_field(env->hstatus, HSTATUS_GVA, 1);
-            } else {
-                /* For other HS-mode traps, we set this to 0. */
-                env->hstatus = set_field(env->hstatus, HSTATUS_GVA, 0);
-            }
 
             if (env->two_stage_lookup && write_tval) {
                 /*

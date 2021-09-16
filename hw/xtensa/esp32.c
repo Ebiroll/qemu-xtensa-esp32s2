@@ -491,6 +491,11 @@ static void esp32_soc_realize(DeviceState *dev, Error **errp)
     esp32_soc_add_unimp_device(sys_mem, "esp32.apbctrl", DR_REG_APB_CTRL_BASE, 0x1000);
     esp32_soc_add_unimp_device(sys_mem, "esp32.i2s0", DR_REG_I2S_BASE, 0x1000);
     esp32_soc_add_unimp_device(sys_mem, "esp32.i2s1", DR_REG_I2S1_BASE, 0x1000);
+    // Top secret
+    esp32_soc_add_unimp_device(sys_mem, "esp32.chipv7_phy", 0x3ff71000, 0x4000);
+    esp32_soc_add_unimp_device(sys_mem, "esp32.chipv7_rf", 0x3FF45000, 0x3000);
+    esp32_soc_add_unimp_device(sys_mem, "esp32.unknown", 0x3FF5c000 , 0x2000);
+
 
     /* Emulation of APB_CTRL_DATE_REG, needed for ECO3 revision detection.
      * This is a small hack to avoid creating a whole new device just to emulate one
@@ -504,6 +509,28 @@ static void esp32_soc_realize(DeviceState *dev, Error **errp)
     cpu_physical_memory_write(apb_ctrl_date_reg, &apb_ctrl_date_reg_val, 4);
 
     qemu_register_reset((QEMUResetHandler*) esp32_soc_reset, dev);
+
+/* Attach st7789v to display    
+    // st7789v is attached to SPI2 and SPI2 so the both HSPI and VSPI will work, 
+    // they share a single console
+    DeviceState *disp=ssi_create_slave(s->spi[2].spi, "st7789v");
+    DeviceState *disp1=ssi_create_slave(s->spi[3].spi, "st7789v");
+    qemu_irq cmd_irq=qemu_irq_split(
+                qdev_get_gpio_in_named(disp, "cmd", 0),
+                qdev_get_gpio_in_named(disp1, "cmd", 0));
+    qemu_irq bl_irq=qemu_irq_split(
+                qdev_get_gpio_in_named(disp, "backlight", 0),
+                qdev_get_gpio_in_named(disp1, "backlight", 0));
+    qdev_connect_gpio_out_named(DEVICE(&s->gpio), ESP32_GPIOS, 16, cmd_irq);
+    qdev_connect_gpio_out_named(DEVICE(&s->gpio), ESP32_GPIOS, 4,bl_irq);
+
+    qemu_irq in0=qdev_get_gpio_in_named(DEVICE(&s->gpio), ESP32_GPIOS_IN, 0);
+    qemu_irq in35=qdev_get_gpio_in_named(DEVICE(&s->gpio), ESP32_GPIOS_IN, 35);
+    qdev_connect_gpio_out_named(disp, "buttons", 0, in0);
+    qdev_connect_gpio_out_named(disp, "buttons", 1, in35);
+    qdev_connect_gpio_out_named(disp1, "buttons", 0, in0);
+    qdev_connect_gpio_out_named(disp1, "buttons", 1, in35);
+*/
 }
 
 static void esp32_soc_init(Object *obj)

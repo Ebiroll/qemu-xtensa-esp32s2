@@ -402,11 +402,6 @@
 #define HCOUNTEREN_IR        (1 << 2)
 #define HCOUNTEREN_HPM3      (1 << 3)
 
-#define HCOUNTEREN_CY        (1 << 0)
-#define HCOUNTEREN_TM        (1 << 1)
-#define HCOUNTEREN_IR        (1 << 2)
-#define HCOUNTEREN_HPM3      (1 << 3)
-
 /* Privilege modes */
 #define PRV_U 0
 #define PRV_S 1

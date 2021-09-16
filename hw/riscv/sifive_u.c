@@ -661,56 +661,14 @@ static bool sifive_u_machine_get_start_in_flash(Object *obj, Error **errp)
 {
     SiFiveUState *s = RISCV_U_MACHINE(obj);
 
-    s->start_in_flash = false;
-    s->msel = 0;
-    object_property_add(obj, "msel", "uint32",
-                        sifive_u_machine_get_uint32_prop,
-                        sifive_u_machine_set_uint32_prop, NULL, &s->msel);
-    object_property_set_description(obj, "msel",
-                                    "Mode Select (MSEL[3:0]) pin state");
-
-    s->serial = OTP_SERIAL;
-    object_property_add(obj, "serial", "uint32",
-                        sifive_u_machine_get_uint32_prop,
-                        sifive_u_machine_set_uint32_prop, NULL, &s->serial);
-    object_property_set_description(obj, "serial", "Board serial number");
+    return s->start_in_flash;
 }
 
 static void sifive_u_machine_set_start_in_flash(Object *obj, bool value, Error **errp)
 {
-    MachineClass *mc = MACHINE_CLASS(oc);
+    SiFiveUState *s = RISCV_U_MACHINE(obj);
 
-    mc->desc = "RISC-V Board compatible with SiFive U SDK";
-    mc->init = sifive_u_machine_init;
-    mc->max_cpus = SIFIVE_U_MANAGEMENT_CPU_COUNT + SIFIVE_U_COMPUTE_CPU_COUNT;
-    mc->min_cpus = SIFIVE_U_MANAGEMENT_CPU_COUNT + 1;
-#if defined(TARGET_RISCV32)
-    mc->default_cpu_type = TYPE_RISCV_CPU_SIFIVE_U34;
-#elif defined(TARGET_RISCV64)
-    mc->default_cpu_type = TYPE_RISCV_CPU_SIFIVE_U54;
-#endif
-    mc->default_cpus = mc->min_cpus;
-
-    object_class_property_add_bool(oc, "start-in-flash",
-                                   sifive_u_machine_get_start_in_flash,
-                                   sifive_u_machine_set_start_in_flash);
-    object_class_property_set_description(oc, "start-in-flash",
-                                          "Set on to tell QEMU's ROM to jump to "
-                                          "flash. Otherwise QEMU will jump to DRAM "
-                                          "or L2LIM depending on the msel value");
-}
-
-static const TypeInfo sifive_u_machine_typeinfo = {
-    .name       = MACHINE_TYPE_NAME("sifive_u"),
-    .parent     = TYPE_MACHINE,
-    .class_init = sifive_u_machine_class_init,
-    .instance_init = sifive_u_machine_instance_init,
-    .instance_size = sizeof(SiFiveUState),
-};
-
-static void sifive_u_machine_init_register_types(void)
-{
-    type_register_static(&sifive_u_machine_typeinfo);
+    s->start_in_flash = value;
 }
 
 static void sifive_u_machine_get_uint32_prop(Object *obj, Visitor *v,
@@ -729,7 +687,7 @@ static void sifive_u_machine_set_uint32_prop(Object *obj, Visitor *v,
 
 static void sifive_u_machine_instance_init(Object *obj)
 {
-    SiFiveUSoCState *s = RISCV_U_SOC(obj);
+    SiFiveUState *s = RISCV_U_MACHINE(obj);
 
     s->start_in_flash = false;
     s->msel = 0;
